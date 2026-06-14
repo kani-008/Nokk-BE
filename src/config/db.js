@@ -9,20 +9,22 @@ if (!process.env.DATABASE_URL) {
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: {
-    rejectUnauthorized: false // Essential for connecting securely to Supabase hosted DBs
+    rejectUnauthorized: false // Required for Supabase-hosted Postgres
   }
 });
 
-// Test connection on database load
+// Verify the connection works on startup
 pool.query('SELECT NOW()', (err, res) => {
   if (err) {
-    console.error('PostgreSQL Connection Pool failed to initialize:', err.message);
+    console.error('PostgreSQL pool failed to initialize:', err.message);
   } else {
-    console.log('PostgreSQL Connection Pool initialized successfully. Server time:', res.rows[0].now);
+    console.log('PostgreSQL pool ready. Server time:', res.rows[0].now);
   }
 });
 
 module.exports = {
+  // Always call db.query(text, params) — never build SQL with string concatenation.
+  // The params array is the only safe way to pass user input into a query.
   query: (text, params) => pool.query(text, params),
   pool
 };
