@@ -1,60 +1,63 @@
-const express = require('express');
-const cors = require('cors');
-const morgan = require('morgan');
-require('dotenv').config();
+const express = require("express");
+const cors = require("cors");
+const morgan = require("morgan");
+require("dotenv").config();
 
-// DB pool — importing it runs the startup connection check.
-const db = require('./config/db');
+const db = require("./config/db.js");
 
-// Routers
-const loginRoute = require('./routes/loginRoute');
-// As you build more features, add their routers here, e.g.:
-// const productsRoute = require('./routes/productsRoute');
+// Routes
+const loginRoute    = require("./routes/LoginRoutes.js");
+const reportsRoute  = require("./routes/reportsRoute.js");
+// Add more as you build them:
+// const productsRoute  = require("./routes/products.js");
+// const ordersRoute    = require("./routes/orders.js");
+// const categoriesRoute= require("./routes/categories.js");
+// const offersRoute    = require("./routes/offers.js");
+// const bannersRoute   = require("./routes/banners.js");
+// const settingsRoute  = require("./routes/settings.js");
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
 // ---- Global middleware ----
-app.use(cors());                              // allow the frontend to call the API
-app.use(morgan('dev'));                       // request logging
-app.use(express.json());                      // parse JSON bodies (REQUIRED before routes)
+app.use(cors());
+app.use(morgan("dev"));
+app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // ---- Health check ----
-app.get('/', (req, res) => {
-  res.json({
-    success: true,
-    message: 'API server is live',
-    version: '1.0.0',
-    timestamp: new Date()
-  });
+app.get("/", (req, res) => {
+  res.json({ success: true, message: "NammaOorKaruvattuKadai API is live", timestamp: new Date() });
 });
 
-// ---- API routes ----
-// loginRoute defines /login, /register, /me — so the full paths become
-// /api/auth/login, /api/auth/register, /api/auth/me.
-// (Change '/api/auth' to '/api/login' if you prefer that prefix.)
-app.use('/api/auth', loginRoute);
-// app.use('/api/products', productsRoute);
+// ---- Mount routes ----
+app.use("/api/auth",         loginRoute);
+app.use("/api/admin/reports",reportsRoute);
+// app.use("/api/products",  productsRoute);
+// app.use("/api/orders",    ordersRoute);
+// app.use("/api/categories",categoriesRoute);
+// app.use("/api/offers",    offersRoute);
+// app.use("/api/banners",   bannersRoute);
+// app.use("/api/settings",  settingsRoute);
 
-// ---- 404 handler ----
+// ---- 404 ----
 app.use((req, res) => {
-  res.status(404).json({ success: false, message: 'Resource not found' });
+  res.status(404).json({ success: false, message: "Resource not found" });
 });
 
 // ---- Global error handler ----
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
-  console.error('Unhandled server error:', err.message);
-  res.status(500).json({ success: false, message: 'Internal server error' });
+  console.error("Unhandled error:", err.message);
+  res.status(500).json({ success: false, message: "Internal server error" });
 });
 
 // ---- Start ----
 app.listen(PORT, () => {
-  console.log('=======================================================');
-  console.log(` Backend listening on port ${PORT}`);
-  console.log(` Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log('=======================================================');
+  console.log("=======================================================");
+  console.log(` NammaOorKaruvattuKadai backend on port ${PORT}`);
+  console.log(` Environment: ${process.env.NODE_ENV || "development"}`);
+  console.log("=======================================================");
 });
 
 module.exports = app;

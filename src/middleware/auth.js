@@ -1,13 +1,11 @@
 const jwt = require("jsonwebtoken");
 
-// Must match ACCESS_TOKEN_SECRET used in the login controller.
 const ACCESS_TOKEN_SECRET = process.env.ACCESS_TOKEN_SECRET || "dev_access_secret_change_me";
 
-// Default export: verifies the access token on protected routes.
-// Usage in routes:  const authenticate = require("../middleware/auth.js");
-function authenticate(req, res, next) {
+// Verifies the Bearer access token. Used by ALL protected routes.
+function verifyToken(req, res, next) {
   const authHeader = req.headers["authorization"];
-  const token = authHeader && authHeader.split(" ")[1]; // "Bearer TOKEN"
+  const token = authHeader && authHeader.split(" ")[1];
 
   if (!token) {
     return res.status(401).json({ success: false, message: "Access denied: no token provided" });
@@ -21,8 +19,7 @@ function authenticate(req, res, next) {
   }
 }
 
-// Admin guard — run AFTER authenticate.
-// Usage:  const { isAdmin } = require("../middleware/auth.js");
+// Admin guard — must run AFTER verifyToken.
 function isAdmin(req, res, next) {
   if (!req.user || req.user.role !== "admin") {
     return res.status(403).json({ success: false, message: "Access denied: admin privileges required" });
@@ -30,5 +27,10 @@ function isAdmin(req, res, next) {
   next();
 }
 
-module.exports = authenticate;       // default export = the authenticate function
-module.exports.isAdmin = isAdmin;    // also available: require("../middleware/auth.js").isAdmin
+// Support BOTH import styles used across the project:
+//   const { verifyToken, isAdmin } = require("../middleware/auth");   <- Antigravity IDE style
+//   const authenticate = require("../middleware/auth");               <- loginRoute style
+module.exports = verifyToken;           // default export (authenticate alias)
+module.exports.verifyToken = verifyToken;
+module.exports.isAdmin = isAdmin;
+module.exports.authenticate = verifyToken;  // alias used in loginRoute
