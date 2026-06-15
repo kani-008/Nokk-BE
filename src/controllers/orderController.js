@@ -7,28 +7,23 @@ const num = (v) => parseFloat(v) || 0;
 
 function formatOrder(ord, items = [], timeline = []) {
   return {
-    id:            ord.id,
-    createdAt:     ord.created_at,
-    updatedAt:     ord.updated_at,
-    // Customer snapshot stored at order time
-    customerName:  ord.customer_name,
-    customerEmail: ord.customer_email,
-    customerPhone: ord.customer_phone,
-    // Pricing — every column
-    subtotal:      num(ord.subtotal),
-    deliveryCharge:num(ord.delivery_charge),
-    discount:      num(ord.discount),
-    couponApplied: ord.coupon_applied,
-    total:         num(ord.total),
-    // Status
-    status:        ord.status,
-    paymentStatus: ord.payment_status,
-    paymentMethod: ord.payment_method,
-    // Parcel tracking (added by schema_fixes migration)
-    courierName:    ord.courier_name   || null,
+    id:             ord.id,
+    createdAt:      ord.created_at,
+    updatedAt:      ord.updated_at,
+    customerName:   ord.customer_name,
+    customerEmail:  ord.customer_email,
+    customerPhone:  ord.customer_phone,
+    subtotal:       num(ord.subtotal),
+    deliveryCharge: num(ord.delivery_charge),
+    discount:       num(ord.discount),
+    couponApplied:  ord.coupon_applied,
+    total:          num(ord.total),
+    status:         ord.status,
+    paymentStatus:  ord.payment_status,
+    paymentMethod:  ord.payment_method,
+    courierName:    ord.courier_name    || null,
     trackingNumber: ord.tracking_number || null,
     trackingUrl:    ord.tracking_url    || null,
-    // Shipping address snapshot
     address: {
       addressLine1: ord.shipping_address_line1,
       addressLine2: ord.shipping_address_line2,
@@ -54,6 +49,9 @@ function formatItem(i) {
   };
 }
 
+// ------------------------------------------------------------------
+// Single order — used by detail endpoints and checkout response
+// ------------------------------------------------------------------
 async function fetchItemsAndTimeline(orderId) {
   const [itemsRes, timelineRes] = await Promise.all([
     db.query(
@@ -73,7 +71,45 @@ async function fetchItemsAndTimeline(orderId) {
   };
 }
 
+// ------------------------------------------------------------------
+// Batch fetch — used by listing endpoints to eliminate N+1.
+// Fetches items + timelines for ALL orders in exactly 2 queries
+// regardless of how many orders are in the list.
+// ------------------------------------------------------------------
+async function fetchItemsAndTimelinesForOrders(orderIds) {
+  if (!orderIds.length) return { itemsMap: {}, timelinesMap: {} };
+
+  const [itemsRes, timelineRes] = await Promise.all([
+    db.query(
+      `SELECT id, order_id, product_id, variant_id, name_en, name_ta, weight, price, quantity
+       FROM order_items WHERE order_id = ANY($1)`,
+      [orderIds]
+    ),
+    db.query(
+      `SELECT order_id, status, notes, created_at AS date
+       FROM order_timelines WHERE order_id = ANY($1) ORDER BY created_at ASC`,
+      [orderIds]
+    )
+  ]);
+
+  const itemsMap = {};
+  itemsRes.rows.forEach(i => {
+    if (!itemsMap[i.order_id]) itemsMap[i.order_id] = [];
+    itemsMap[i.order_id].push(formatItem(i));
+  });
+
+  const timelinesMap = {};
+  timelineRes.rows.forEach(t => {
+    if (!timelinesMap[t.order_id]) timelinesMap[t.order_id] = [];
+    timelinesMap[t.order_id].push(t);
+  });
+
+  return { itemsMap, timelinesMap };
+}
+
+// ------------------------------------------------------------------
 // Generate unique ORD-XXXX id
+// ------------------------------------------------------------------
 async function generateOrderId() {
   let orderId, isUnique = false;
   while (!isUnique) {
@@ -87,7 +123,6 @@ async function generateOrderId() {
 
 // ==================================================================
 // POST /api/orders/checkout   (customer — login required)
-// Places a new order.
 // Body: { items, address, paymentMethod, couponApplied?,
 //         subtotal, deliveryCharge, discount, total }
 // ==================================================================
@@ -139,9 +174,9 @@ async function checkout(req, res) {
       );
     }
 
-    const orderId      = await generateOrderId();
+    const orderId       = await generateOrderId();
     const paymentStatus = paymentMethod.toLowerCase().includes("cod") ? "pending" : "paid";
-    const addrLine1    = address.addressLine1 || `${address.doorNo || ""} ${address.street || ""}`.trim();
+    const addrLine1     = address.addressLine1 || `${address.doorNo || ""} ${address.street || ""}`.trim();
 
     // Insert order
     await db.query(
@@ -182,7 +217,7 @@ async function checkout(req, res) {
       );
     }
 
-    // Initial timeline
+    // Initial timeline entry
     await db.query(
       "INSERT INTO order_timelines (order_id, status, notes) VALUES ($1,'pending','Order placed by customer.')",
       [orderId]
@@ -196,12 +231,13 @@ async function checkout(req, res) {
 
     await db.query("COMMIT");
 
+    // Uses single-order fetch (correct — only one order here)
     const { items: fmtItems, timeline } = await fetchItemsAndTimeline(orderId);
     const orderRow = await db.query("SELECT * FROM orders WHERE id = $1", [orderId]);
     return res.status(201).json({
       success: true,
       message: "Order placed successfully!",
-      order: formatOrder(orderRow.rows[0], fmtItems, timeline)
+      order:   formatOrder(orderRow.rows[0], fmtItems, timeline)
     });
   } catch (err) {
     await db.query("ROLLBACK");
@@ -213,6 +249,7 @@ async function checkout(req, res) {
 // ==================================================================
 // GET /api/orders/my   (customer — own orders only)
 // Query: ?status=  ?page=1  ?limit=10
+// OPTIMIZED: 4 queries total regardless of result size (no N+1)
 // ==================================================================
 async function getMyOrders(req, res) {
   const page   = Math.max(parseInt(req.query.page)  || 1, 1);
@@ -233,11 +270,10 @@ async function getMyOrders(req, res) {
       [req.user.id, status]
     );
 
-    const orders = await Promise.all(
-      result.rows.map(async (ord) => {
-        const { items, timeline } = await fetchItemsAndTimeline(ord.id);
-        return formatOrder(ord, items, timeline);
-      })
+    const orderIds = result.rows.map(o => o.id);
+    const { itemsMap, timelinesMap } = await fetchItemsAndTimelinesForOrders(orderIds);
+    const orders = result.rows.map(ord =>
+      formatOrder(ord, itemsMap[ord.id] || [], timelinesMap[ord.id] || [])
     );
 
     return res.json({
@@ -296,10 +332,16 @@ async function cancelMyOrder(req, res) {
       return res.status(400).json({ success: false, message: `Cannot cancel an order with status: ${ord.status}` });
     }
 
-    await db.query("UPDATE orders SET status = 'cancelled', updated_at = NOW() WHERE id = $1", [req.params.id]);
+    await db.query(
+      "UPDATE orders SET status = 'cancelled', updated_at = NOW() WHERE id = $1",
+      [req.params.id]
+    );
 
     // Restore stock
-    const itemsRes = await db.query("SELECT variant_id, quantity FROM order_items WHERE order_id = $1", [req.params.id]);
+    const itemsRes = await db.query(
+      "SELECT variant_id, quantity FROM order_items WHERE order_id = $1",
+      [req.params.id]
+    );
     for (const item of itemsRes.rows) {
       if (item.variant_id) {
         await db.query(
@@ -348,16 +390,19 @@ async function requestReturn(req, res) {
       return res.status(400).json({ success: false, message: "Only delivered orders can be returned" });
     }
 
-    // Check no duplicate return request
     const existing = await db.query(
-      "SELECT id FROM return_requests WHERE order_id = $1 AND user_id = $2", [req.params.id, req.user.id]
+      "SELECT id FROM return_requests WHERE order_id = $1 AND user_id = $2",
+      [req.params.id, req.user.id]
     );
     if (existing.rows.length > 0) {
       await db.query("ROLLBACK");
       return res.status(409).json({ success: false, message: "Return request already submitted for this order" });
     }
 
-    await db.query("UPDATE orders SET status = 'return_requested', updated_at = NOW() WHERE id = $1", [req.params.id]);
+    await db.query(
+      "UPDATE orders SET status = 'return_requested', updated_at = NOW() WHERE id = $1",
+      [req.params.id]
+    );
     await db.query(
       "INSERT INTO return_requests (order_id, user_id, reason, details, status) VALUES ($1,$2,$3,$4,'requested')",
       [req.params.id, req.user.id, reason, details || null]
@@ -380,6 +425,7 @@ async function requestReturn(req, res) {
 // ADMIN — GET /api/orders/admin/list
 // All orders — filterable + paginated.
 // Query: ?status=  ?paymentStatus=  ?search=  ?page=1  ?limit=20
+// OPTIMIZED: 4 queries total regardless of result size (no N+1)
 // ==================================================================
 async function adminGetAllOrders(req, res) {
   const page          = Math.max(parseInt(req.query.page)  || 1, 1);
@@ -392,7 +438,7 @@ async function adminGetAllOrders(req, res) {
   try {
     const result = await db.query(
       `SELECT * FROM orders
-       WHERE ($1::text IS NULL OR status        = $1)
+       WHERE ($1::text IS NULL OR status         = $1)
          AND ($2::text IS NULL OR payment_status = $2)
          AND ($3::text IS NULL OR
                customer_name  ILIKE $3 OR
@@ -405,17 +451,16 @@ async function adminGetAllOrders(req, res) {
 
     const countRes = await db.query(
       `SELECT COUNT(*) AS total FROM orders
-       WHERE ($1::text IS NULL OR status        = $1)
+       WHERE ($1::text IS NULL OR status         = $1)
          AND ($2::text IS NULL OR payment_status = $2)
          AND ($3::text IS NULL OR customer_name ILIKE $3 OR customer_phone ILIKE $3 OR id ILIKE $3)`,
       [status, paymentStatus, search]
     );
 
-    const orders = await Promise.all(
-      result.rows.map(async (ord) => {
-        const { items, timeline } = await fetchItemsAndTimeline(ord.id);
-        return formatOrder(ord, items, timeline);
-      })
+    const orderIds = result.rows.map(o => o.id);
+    const { itemsMap, timelinesMap } = await fetchItemsAndTimelinesForOrders(orderIds);
+    const orders = result.rows.map(ord =>
+      formatOrder(ord, itemsMap[ord.id] || [], timelinesMap[ord.id] || [])
     );
 
     return res.json({
@@ -439,7 +484,10 @@ async function adminGetAllOrders(req, res) {
 // ==================================================================
 async function adminGetOrderById(req, res) {
   try {
-    const result = await db.query("SELECT * FROM orders WHERE id = $1", [req.params.id]);
+    const result = await db.query(
+      "SELECT * FROM orders WHERE id = $1",
+      [req.params.id]
+    );
     if (result.rows.length === 0) {
       return res.status(404).json({ success: false, message: "Order not found" });
     }
@@ -453,7 +501,7 @@ async function adminGetOrderById(req, res) {
 
 // ==================================================================
 // ADMIN — PUT /api/orders/admin/:id/status
-// Update order status + add parcel tracking info.
+// Update order status + parcel tracking info.
 // Body: { status, notes?, courierName?, trackingNumber?, trackingUrl? }
 // ==================================================================
 async function adminUpdateStatus(req, res) {
@@ -466,7 +514,8 @@ async function adminUpdateStatus(req, res) {
     await db.query("BEGIN");
 
     const ordRes = await db.query(
-      "SELECT status FROM orders WHERE id = $1 FOR UPDATE", [req.params.id]
+      "SELECT status FROM orders WHERE id = $1 FOR UPDATE",
+      [req.params.id]
     );
     if (ordRes.rows.length === 0) {
       await db.query("ROLLBACK");
@@ -486,10 +535,11 @@ async function adminUpdateStatus(req, res) {
       [status, courierName || null, trackingNumber || null, trackingUrl || null, req.params.id]
     );
 
-    // Restore stock if cancelling an active order
+    // Restore stock if admin is cancelling an active order
     if (currentStatus !== "cancelled" && status === "cancelled") {
       const itemsRes = await db.query(
-        "SELECT variant_id, quantity FROM order_items WHERE order_id = $1", [req.params.id]
+        "SELECT variant_id, quantity FROM order_items WHERE order_id = $1",
+        [req.params.id]
       );
       for (const item of itemsRes.rows) {
         if (item.variant_id) {
@@ -517,7 +567,8 @@ async function adminUpdateStatus(req, res) {
 
 // ==================================================================
 // ADMIN — GET /api/orders/admin/returns
-// All return requests. Query: ?status=requested|approved|rejected|completed
+// All return requests.
+// Query: ?status=requested|approved|rejected|completed
 // ==================================================================
 async function adminGetReturns(req, res) {
   const status = req.query.status || null;
@@ -539,8 +590,9 @@ async function adminGetReturns(req, res) {
 
 // ==================================================================
 // ADMIN — PUT /api/orders/admin/returns/:requestId
-// Approve / reject / complete a return. Restores stock on complete.
+// Approve / reject / complete a return.
 // Body: { status, adminNotes? }
+// completed → restores stock + marks order returned
 // ==================================================================
 async function adminUpdateReturn(req, res) {
   const { status, adminNotes } = req.body;
@@ -553,7 +605,8 @@ async function adminUpdateReturn(req, res) {
     await db.query("BEGIN");
 
     const retRes = await db.query(
-      "SELECT * FROM return_requests WHERE id = $1 FOR UPDATE", [req.params.requestId]
+      "SELECT * FROM return_requests WHERE id = $1 FOR UPDATE",
+      [req.params.requestId]
     );
     if (retRes.rows.length === 0) {
       await db.query("ROLLBACK");
@@ -567,7 +620,6 @@ async function adminUpdateReturn(req, res) {
       [status, adminNotes || null, ret.id]
     );
 
-    // Map return status → order status
     const orderStatusMap = { approved: "return_requested", rejected: "delivered", completed: "returned" };
     const newOrderStatus = orderStatusMap[status];
     const tlNote = {
@@ -579,7 +631,8 @@ async function adminUpdateReturn(req, res) {
     // Restore stock on completion
     if (status === "completed") {
       const itemsRes = await db.query(
-        "SELECT variant_id, quantity FROM order_items WHERE order_id = $1", [ret.order_id]
+        "SELECT variant_id, quantity FROM order_items WHERE order_id = $1",
+        [ret.order_id]
       );
       for (const item of itemsRes.rows) {
         if (item.variant_id) {
@@ -591,7 +644,10 @@ async function adminUpdateReturn(req, res) {
       }
     }
 
-    await db.query("UPDATE orders SET status = $1, updated_at = NOW() WHERE id = $2", [newOrderStatus, ret.order_id]);
+    await db.query(
+      "UPDATE orders SET status = $1, updated_at = NOW() WHERE id = $2",
+      [newOrderStatus, ret.order_id]
+    );
     await db.query(
       "INSERT INTO order_timelines (order_id, status, notes) VALUES ($1,$2,$3)",
       [ret.order_id, newOrderStatus, tlNote]

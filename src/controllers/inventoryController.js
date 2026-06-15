@@ -1,0 +1,245 @@
+const db = require("../config/db.js");
+
+// Inventory = product_variants table — all stock management lives here.
+// product_variants columns: id, product_id, weight_grams, weight_label,
+//                           price, compare_price, stock_qty, is_active,
+//                           created_at, updated_at
+
+const num = (v) => parseFloat(v) || 0;
+
+// ==================================================================
+// ADMIN — GET /api/inventory
+// Full inventory list — every variant with product name and category.
+// Supports filter by low stock, out of stock, category, search.
+// Query: ?lowStock=true  ?outOfStock=true  ?category=slug
+//        ?search=text  ?page=1  ?limit=50
+// ==================================================================
+async function getInventory(req, res) {
+  const page       = Math.max(parseInt(req.query.page)  || 1, 1);
+  const limit      = Math.min(parseInt(req.query.limit) || 50, 200);
+  const offset     = (page - 1) * limit;
+  const lowStock   = req.query.lowStock   === "true";
+  const outOfStock = req.query.outOfStock === "true";
+  const catSlug    = req.query.category   || null;
+  const search     = req.query.search     || null;
+
+  try {
+    const result = await db.query(
+      `SELECT
+         pv.id              AS variant_id,
+         pv.weight_label,
+         pv.weight_grams,
+         pv.price,
+         pv.compare_price,
+         pv.stock_qty,
+         pv.is_active,
+         pv.updated_at      AS stock_updated_at,
+         p.id               AS product_id,
+         p.name_en,
+         p.name_ta,
+         p.slug,
+         p.is_active        AS product_active,
+         c.name_en          AS category_name,
+         c.slug             AS category_slug,
+         pi.image_url       AS primary_image
+       FROM product_variants pv
+       JOIN products p ON p.id = pv.product_id
+       LEFT JOIN categories c ON c.id = p.category_id
+       LEFT JOIN product_images pi ON pi.product_id = p.id AND pi.is_primary = TRUE
+       WHERE
+         (NOT $1 OR pv.stock_qty > 0 AND pv.stock_qty <= 10) AND
+         (NOT $2 OR pv.stock_qty = 0) AND
+         ($3::text IS NULL OR c.slug = $3) AND
+         ($4::text IS NULL OR
+           p.name_en ILIKE '%' || $4 || '%' OR
+           p.name_ta ILIKE '%' || $4 || '%'
+         )
+       ORDER BY pv.stock_qty ASC, p.name_en ASC
+       LIMIT $5 OFFSET $6`,
+      [lowStock, outOfStock, catSlug, search, limit, offset]
+    );
+
+    const countRes = await db.query(
+      `SELECT COUNT(*) AS total
+       FROM product_variants pv
+       JOIN products p ON p.id = pv.product_id
+       LEFT JOIN categories c ON c.id = p.category_id
+       WHERE
+         (NOT $1 OR pv.stock_qty > 0 AND pv.stock_qty <= 10) AND
+         (NOT $2 OR pv.stock_qty = 0) AND
+         ($3::text IS NULL OR c.slug = $3) AND
+         ($4::text IS NULL OR p.name_en ILIKE '%' || $4 || '%' OR p.name_ta ILIKE '%' || $4 || '%')`,
+      [lowStock, outOfStock, catSlug, search]
+    );
+
+    return res.json({
+      success: true,
+      pagination: {
+        page, limit,
+        total:      parseInt(countRes.rows[0].total),
+        totalPages: Math.ceil(parseInt(countRes.rows[0].total) / limit)
+      },
+      inventory: result.rows.map(r => ({
+        variantId:      r.variant_id,
+        weightLabel:    r.weight_label,
+        weightGrams:    r.weight_grams,
+        price:          num(r.price),
+        comparePrice:   r.compare_price ? num(r.compare_price) : null,
+        stockQty:       parseInt(r.stock_qty),
+        isActive:       r.is_active,
+        stockStatus:    parseInt(r.stock_qty) === 0 ? "out_of_stock"
+                        : parseInt(r.stock_qty) <= 10 ? "low_stock" : "in_stock",
+        stockUpdatedAt: r.stock_updated_at,
+        productId:      r.product_id,
+        name:           r.name_ta ? `${r.name_en} (${r.name_ta})` : r.name_en,
+        nameEn:         r.name_en,
+        nameTa:         r.name_ta,
+        slug:           r.slug,
+        productActive:  r.product_active,
+        categoryName:   r.category_name,
+        categorySlug:   r.category_slug,
+        primaryImage:   r.primary_image
+      }))
+    });
+  } catch (err) {
+    console.error("Get inventory error:", err.message);
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+}
+
+// ==================================================================
+// ADMIN — GET /api/inventory/summary
+// Stock summary counts for the admin inventory dashboard card.
+// ==================================================================
+async function getInventorySummary(req, res) {
+  try {
+    const result = await db.query(
+      `SELECT
+         COUNT(*)                                           AS total_variants,
+         COUNT(*) FILTER (WHERE pv.stock_qty  = 0)         AS out_of_stock,
+         COUNT(*) FILTER (WHERE pv.stock_qty  > 0
+                            AND pv.stock_qty <= 10)        AS low_stock,
+         COUNT(*) FILTER (WHERE pv.stock_qty  > 10)        AS in_stock,
+         COALESCE(SUM(pv.stock_qty), 0)                    AS total_units
+       FROM product_variants pv
+       WHERE pv.is_active = TRUE`
+    );
+    return res.json({ success: true, summary: result.rows[0] });
+  } catch (err) {
+    console.error("Inventory summary error:", err.message);
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+}
+
+// ==================================================================
+// ADMIN — PUT /api/inventory/:variantId
+// Update stock quantity and/or price for a single variant.
+// Body: { stockQty?, price?, comparePrice?, isActive? }
+// This is the main "update stock" action from the inventory page.
+// ==================================================================
+async function updateStock(req, res) {
+  const { stockQty, price, comparePrice, isActive } = req.body;
+
+  if (stockQty === undefined && price === undefined &&
+      comparePrice === undefined && isActive === undefined) {
+    return res.status(400).json({ success: false, message: "Nothing to update" });
+  }
+  if (stockQty !== undefined && (isNaN(stockQty) || stockQty < 0)) {
+    return res.status(400).json({ success: false, message: "stockQty must be 0 or more" });
+  }
+
+  try {
+    const result = await db.query(
+      `UPDATE product_variants SET
+         stock_qty     = COALESCE($1, stock_qty),
+         price         = COALESCE($2, price),
+         compare_price = COALESCE($3, compare_price),
+         is_active     = COALESCE($4, is_active),
+         updated_at    = NOW()
+       WHERE id = $5
+       RETURNING id, product_id, weight_label, stock_qty, price, compare_price, is_active, updated_at`,
+      [
+        stockQty      !== undefined ? parseInt(stockQty) : null,
+        price         !== undefined ? num(price)         : null,
+        comparePrice  !== undefined ? num(comparePrice)  : null,
+        isActive      !== undefined ? isActive           : null,
+        req.params.variantId
+      ]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, message: "Variant not found" });
+    }
+    const v = result.rows[0];
+    return res.json({
+      success: true,
+      message: "Stock updated",
+      variant: {
+        variantId:    v.id,
+        productId:    v.product_id,
+        weightLabel:  v.weight_label,
+        stockQty:     parseInt(v.stock_qty),
+        price:        num(v.price),
+        comparePrice: v.compare_price ? num(v.compare_price) : null,
+        isActive:     v.is_active,
+        updatedAt:    v.updated_at
+      }
+    });
+  } catch (err) {
+    console.error("Update stock error:", err.message);
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+}
+
+// ==================================================================
+// ADMIN — POST /api/inventory/bulk-update
+// Update stock for multiple variants at once — for bulk import/edit.
+// Body: { updates: [{ variantId, stockQty, price?, comparePrice? }] }
+// ==================================================================
+async function bulkUpdateStock(req, res) {
+  const { updates } = req.body;
+
+  if (!Array.isArray(updates) || updates.length === 0) {
+    return res.status(400).json({ success: false, message: "updates array is required" });
+  }
+  if (updates.length > 100) {
+    return res.status(400).json({ success: false, message: "Maximum 100 variants per bulk update" });
+  }
+
+  try {
+    await db.query("BEGIN");
+
+    const results = [];
+    for (const item of updates) {
+      if (!item.variantId) continue;
+      const r = await db.query(
+        `UPDATE product_variants SET
+           stock_qty     = COALESCE($1, stock_qty),
+           price         = COALESCE($2, price),
+           compare_price = COALESCE($3, compare_price),
+           updated_at    = NOW()
+         WHERE id = $4
+         RETURNING id, weight_label, stock_qty, price`,
+        [
+          item.stockQty     !== undefined ? parseInt(item.stockQty) : null,
+          item.price        !== undefined ? num(item.price)         : null,
+          item.comparePrice !== undefined ? num(item.comparePrice)  : null,
+          item.variantId
+        ]
+      );
+      if (r.rows.length > 0) results.push(r.rows[0]);
+    }
+
+    await db.query("COMMIT");
+    return res.json({
+      success: true,
+      message: `${results.length} variant(s) updated`,
+      updated: results
+    });
+  } catch (err) {
+    await db.query("ROLLBACK");
+    console.error("Bulk update stock error:", err.message);
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+}
+
+module.exports = { getInventory, getInventorySummary, updateStock, bulkUpdateStock };
