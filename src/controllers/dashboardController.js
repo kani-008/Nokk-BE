@@ -1,0 +1,413 @@
+const db = require("../config/db.js");
+
+// ------------------------------------------------------------------
+// Helper: parse numeric safely
+// ------------------------------------------------------------------
+const num = (v) => parseFloat(v) || 0;
+
+// ==================================================================
+// GET /api/dashboard/summary
+// Top-level KPI cards for the admin dashboard home.
+// Returns: revenue, orders, customers, avg order value — for today,
+// this week, this month, and all-time.
+// ==================================================================
+async function getSummary(req, res) {
+  try {
+    const stats = await db.query(`
+      SELECT
+        -- All-time
+        COUNT(*)                                                        AS total_orders,
+        COALESCE(SUM(total), 0)                                        AS total_revenue,
+        COALESCE(SUM(discount), 0)                                     AS total_discount,
+        COALESCE(SUM(delivery_charge), 0)                              AS total_delivery,
+        COALESCE(AVG(total), 0)                                        AS avg_order_value,
+        COUNT(*) FILTER (WHERE status = 'pending')                     AS pending_orders,
+        COUNT(*) FILTER (WHERE status = 'processing')                  AS processing_orders,
+        COUNT(*) FILTER (WHERE status = 'delivered')                   AS delivered_orders,
+        COUNT(*) FILTER (WHERE status = 'cancelled')                   AS cancelled_orders,
+
+        -- Today
+        COUNT(*) FILTER (WHERE created_at >= CURRENT_DATE)            AS today_orders,
+        COALESCE(SUM(total) FILTER (WHERE created_at >= CURRENT_DATE), 0) AS today_revenue,
+
+        -- This week (Mon–Sun)
+        COUNT(*) FILTER (WHERE created_at >= date_trunc('week', NOW()))   AS week_orders,
+        COALESCE(SUM(total) FILTER (WHERE created_at >= date_trunc('week', NOW())), 0) AS week_revenue,
+
+        -- This month
+        COUNT(*) FILTER (WHERE created_at >= date_trunc('month', NOW()))  AS month_orders,
+        COALESCE(SUM(total) FILTER (WHERE created_at >= date_trunc('month', NOW())), 0) AS month_revenue
+      FROM orders
+      WHERE status NOT IN ('cancelled')
+    `);
+
+    const customers = await db.query(`
+      SELECT
+        COUNT(*)                                                        AS total_customers,
+        COUNT(*) FILTER (WHERE created_at >= CURRENT_DATE)             AS today_new,
+        COUNT(*) FILTER (WHERE created_at >= date_trunc('week', NOW())) AS week_new,
+        COUNT(*) FILTER (WHERE created_at >= date_trunc('month', NOW())) AS month_new
+      FROM users
+      WHERE role = 'customer'
+    `);
+
+    const lowStock = await db.query(`
+      SELECT COUNT(*) AS low_stock_count
+      FROM product_variants
+      WHERE is_active = TRUE AND stock_qty <= 10
+    `);
+
+    const pendingReturns = await db.query(`
+      SELECT COUNT(*) AS pending_returns
+      FROM return_requests
+      WHERE status = 'requested'
+    `);
+
+    const s = stats.rows[0];
+    const c = customers.rows[0];
+
+    return res.json({
+      success: true,
+      summary: {
+        allTime: {
+          orders:         parseInt(s.total_orders),
+          revenue:        num(s.total_revenue),
+          discount:       num(s.total_discount),
+          delivery:       num(s.total_delivery),
+          avgOrderValue:  num(s.avg_order_value)
+        },
+        today: {
+          orders:  parseInt(s.today_orders),
+          revenue: num(s.today_revenue)
+        },
+        thisWeek: {
+          orders:  parseInt(s.week_orders),
+          revenue: num(s.week_revenue)
+        },
+        thisMonth: {
+          orders:  parseInt(s.month_orders),
+          revenue: num(s.month_revenue)
+        },
+        orderStatus: {
+          pending:    parseInt(s.pending_orders),
+          processing: parseInt(s.processing_orders),
+          delivered:  parseInt(s.delivered_orders),
+          cancelled:  parseInt(s.cancelled_orders)
+        },
+        customers: {
+          total:      parseInt(c.total_customers),
+          todayNew:   parseInt(c.today_new),
+          weekNew:    parseInt(c.week_new),
+          monthNew:   parseInt(c.month_new)
+        },
+        alerts: {
+          lowStockVariants: parseInt(lowStock.rows[0].low_stock_count),
+          pendingReturns:   parseInt(pendingReturns.rows[0].pending_returns)
+        }
+      }
+    });
+  } catch (err) {
+    console.error("Dashboard summary error:", err.message);
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+}
+
+// ==================================================================
+// GET /api/dashboard/revenue-chart?period=daily|weekly|monthly
+// Revenue + order count over time for the chart.
+// Default: last 30 days (daily).
+// ==================================================================
+async function getRevenueChart(req, res) {
+  const period = req.query.period || "daily";
+
+  const truncMap = { daily: "day", weekly: "week", monthly: "month" };
+  const trunc = truncMap[period] || "day";
+
+  // How far back to look
+  const intervalMap = { daily: "30 days", weekly: "12 weeks", monthly: "12 months" };
+  const interval = intervalMap[period] || "30 days";
+
+  try {
+    const result = await db.query(`
+      SELECT
+        date_trunc($1, created_at)   AS period,
+        COUNT(*)                     AS orders,
+        COALESCE(SUM(total), 0)      AS revenue,
+        COALESCE(SUM(discount), 0)   AS discount
+      FROM orders
+      WHERE created_at >= NOW() - INTERVAL '${interval}'
+        AND status NOT IN ('cancelled')
+      GROUP BY date_trunc($1, created_at)
+      ORDER BY period ASC
+    `, [trunc]);
+
+    return res.json({
+      success: true,
+      period,
+      chart: result.rows.map(r => ({
+        period:   r.period,
+        orders:   parseInt(r.orders),
+        revenue:  num(r.revenue),
+        discount: num(r.discount)
+      }))
+    });
+  } catch (err) {
+    console.error("Revenue chart error:", err.message);
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+}
+
+// ==================================================================
+// GET /api/dashboard/top-products?limit=10
+// Best-selling products by revenue and units sold.
+// ==================================================================
+async function getTopProducts(req, res) {
+  const limit = Math.min(parseInt(req.query.limit) || 10, 50);
+
+  try {
+    const result = await db.query(`
+      SELECT
+        p.id,
+        p.name_en,
+        p.name_ta,
+        c.name_en                       AS category,
+        SUM(oi.quantity)                AS units_sold,
+        SUM(oi.price * oi.quantity)     AS revenue,
+        COUNT(DISTINCT oi.order_id)     AS order_count
+      FROM order_items oi
+      JOIN products p   ON p.id = oi.product_id
+      LEFT JOIN categories c ON c.id = p.category_id
+      JOIN orders o     ON o.id = oi.order_id
+      WHERE o.status NOT IN ('cancelled', 'returned')
+      GROUP BY p.id, p.name_en, p.name_ta, c.name_en
+      ORDER BY revenue DESC
+      LIMIT $1
+    `, [limit]);
+
+    return res.json({
+      success: true,
+      topProducts: result.rows.map(r => ({
+        id:         r.id,
+        name:       r.name_ta ? `${r.name_en} (${r.name_ta})` : r.name_en,
+        category:   r.category,
+        unitsSold:  parseInt(r.units_sold),
+        revenue:    num(r.revenue),
+        orderCount: parseInt(r.order_count)
+      }))
+    });
+  } catch (err) {
+    console.error("Top products error:", err.message);
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+}
+
+// ==================================================================
+// GET /api/dashboard/top-customers?limit=10
+// Customers ranked by total spend.
+// ==================================================================
+async function getTopCustomers(req, res) {
+  const limit = Math.min(parseInt(req.query.limit) || 10, 50);
+
+  try {
+    const result = await db.query(`
+      SELECT
+        u.id,
+        u.full_name,
+        u.email,
+        u.phone,
+        COUNT(o.id)        AS total_orders,
+        SUM(o.total)       AS total_spent,
+        MAX(o.created_at)  AS last_order_at
+      FROM users u
+      JOIN orders o ON o.user_id = u.id
+      WHERE o.status NOT IN ('cancelled', 'returned')
+      GROUP BY u.id, u.full_name, u.email, u.phone
+      ORDER BY total_spent DESC
+      LIMIT $1
+    `, [limit]);
+
+    return res.json({
+      success: true,
+      topCustomers: result.rows.map(r => ({
+        id:          r.id,
+        name:        r.full_name,
+        email:       r.email,
+        phone:       r.phone,
+        totalOrders: parseInt(r.total_orders),
+        totalSpent:  num(r.total_spent),
+        lastOrderAt: r.last_order_at
+      }))
+    });
+  } catch (err) {
+    console.error("Top customers error:", err.message);
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+}
+
+// ==================================================================
+// GET /api/dashboard/low-stock?limit=20
+// Variants running low on stock (stock_qty <= 10).
+// ==================================================================
+async function getLowStock(req, res) {
+  const limit = Math.min(parseInt(req.query.limit) || 20, 100);
+
+  try {
+    const result = await db.query(`
+      SELECT
+        pv.id            AS variant_id,
+        p.id             AS product_id,
+        p.name_en,
+        p.name_ta,
+        pv.weight_label,
+        pv.stock_qty,
+        pv.sku
+      FROM product_variants pv
+      JOIN products p ON p.id = pv.product_id
+      WHERE pv.is_active = TRUE AND pv.stock_qty <= 10
+      ORDER BY pv.stock_qty ASC
+      LIMIT $1
+    `, [limit]);
+
+    return res.json({
+      success: true,
+      lowStock: result.rows.map(r => ({
+        variantId:   r.variant_id,
+        productId:   r.product_id,
+        name:        r.name_ta ? `${r.name_en} (${r.name_ta})` : r.name_en,
+        weightLabel: r.weight_label,
+        stockQty:    parseInt(r.stock_qty),
+        sku:         r.sku
+      }))
+    });
+  } catch (err) {
+    console.error("Low stock error:", err.message);
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+}
+
+// ==================================================================
+// GET /api/dashboard/recent-orders?limit=10
+// Latest orders with customer + status — for the dashboard feed.
+// ==================================================================
+async function getRecentOrders(req, res) {
+  const limit = Math.min(parseInt(req.query.limit) || 10, 50);
+
+  try {
+    const result = await db.query(`
+      SELECT
+        o.id,
+        o.customer_name,
+        o.customer_phone,
+        o.total,
+        o.status,
+        o.payment_status,
+        o.payment_method,
+        o.created_at
+      FROM orders o
+      ORDER BY o.created_at DESC
+      LIMIT $1
+    `, [limit]);
+
+    return res.json({
+      success: true,
+      recentOrders: result.rows.map(r => ({
+        id:            r.id,
+        customerName:  r.customer_name,
+        customerPhone: r.customer_phone,
+        total:         num(r.total),
+        status:        r.status,
+        paymentStatus: r.payment_status,
+        paymentMethod: r.payment_method,
+        createdAt:     r.created_at
+      }))
+    });
+  } catch (err) {
+    console.error("Recent orders error:", err.message);
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+}
+
+// ==================================================================
+// GET /api/dashboard/sales-by-category
+// Revenue breakdown per category.
+// ==================================================================
+async function getSalesByCategory(req, res) {
+  try {
+    const result = await db.query(`
+      SELECT
+        COALESCE(c.name_en, 'Uncategorised')   AS category,
+        COUNT(DISTINCT o.id)                    AS order_count,
+        SUM(oi.quantity)                        AS units_sold,
+        SUM(oi.price * oi.quantity)             AS revenue
+      FROM order_items oi
+      JOIN products p    ON p.id = oi.product_id
+      LEFT JOIN categories c ON c.id = p.category_id
+      JOIN orders o      ON o.id = oi.order_id
+      WHERE o.status NOT IN ('cancelled', 'returned')
+      GROUP BY c.name_en
+      ORDER BY revenue DESC
+    `);
+
+    return res.json({
+      success: true,
+      salesByCategory: result.rows.map(r => ({
+        category:   r.category,
+        orderCount: parseInt(r.order_count),
+        unitsSold:  parseInt(r.units_sold),
+        revenue:    num(r.revenue)
+      }))
+    });
+  } catch (err) {
+    console.error("Sales by category error:", err.message);
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+}
+
+// ==================================================================
+// GET /api/dashboard/return-requests?status=requested
+// Return/refund requests list for the admin.
+// ==================================================================
+async function getReturnRequests(req, res) {
+  const status = req.query.status || null;
+  const limit  = Math.min(parseInt(req.query.limit) || 20, 100);
+
+  try {
+    const result = await db.query(`
+      SELECT
+        rr.id,
+        rr.order_id,
+        rr.reason,
+        rr.details,
+        rr.status,
+        rr.admin_notes,
+        rr.created_at,
+        u.full_name   AS customer_name,
+        u.phone       AS customer_phone,
+        u.email       AS customer_email
+      FROM return_requests rr
+      JOIN users u ON u.id = rr.user_id
+      WHERE ($1::text IS NULL OR rr.status = $1)
+      ORDER BY rr.created_at DESC
+      LIMIT $2
+    `, [status, limit]);
+
+    return res.json({
+      success: true,
+      returnRequests: result.rows
+    });
+  } catch (err) {
+    console.error("Return requests error:", err.message);
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+}
+
+module.exports = {
+  getSummary,
+  getRevenueChart,
+  getTopProducts,
+  getTopCustomers,
+  getLowStock,
+  getRecentOrders,
+  getSalesByCategory,
+  getReturnRequests
+};
