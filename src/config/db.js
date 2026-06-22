@@ -1,16 +1,20 @@
 const { Pool } = require('pg');
 require('dotenv').config();
 
-if (!process.env.DATABASE_URL) {
-  console.error('CRITICAL: DATABASE_URL is not set in environment variables!');
+const { DB_USER, DB_PASSWORD, DB_HOST, DB_PORT, DB_NAME } = process.env;
+
+if (!DB_USER || !DB_PASSWORD || !DB_HOST || !DB_PORT || !DB_NAME) {
+  console.error('CRITICAL: One or more DB_* environment variables are missing!');
   process.exit(1);
 }
 
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: {
-    rejectUnauthorized: false // Required for Supabase-hosted Postgres
-  }
+  user:     DB_USER,
+  password: DB_PASSWORD,
+  host:     DB_HOST,
+  port:     Number(DB_PORT),
+  database: DB_NAME,
+  ssl: { rejectUnauthorized: false }
 });
 
 // Verify the connection works on startup

@@ -7,6 +7,7 @@ function formatBanner(b) {
     title:     b.title,
     subtitle:  b.subtitle,
     imageUrl:  b.image_url,
+    videoUrl:  b.video_url,
     linkUrl:   b.link_url,
     sortOrder: b.sort_order,
     isActive:  b.is_active,
@@ -51,15 +52,15 @@ async function getAllBanners(req, res) {
 // Body: { title, subtitle?, imageUrl, linkUrl?, sortOrder?, isActive? }
 // ==================================================================
 async function createBanner(req, res) {
-  const { title, subtitle, imageUrl, linkUrl, sortOrder, isActive } = req.body;
-  if (!title || !imageUrl) {
-    return res.status(400).json({ success: false, message: "title and imageUrl are required" });
+  const { title, subtitle, imageUrl, videoUrl, linkUrl, sortOrder, isActive } = req.body;
+  if (!title) {
+    return res.status(400).json({ success: false, message: "title is required" });
   }
   try {
     const result = await db.query(
-      `INSERT INTO banners (title, subtitle, image_url, link_url, sort_order, is_active)
-       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
-      [title.trim(), subtitle || null, imageUrl, linkUrl || null, sortOrder ?? 0, isActive ?? true]
+      `INSERT INTO banners (title, subtitle, image_url, video_url, link_url, sort_order, is_active)
+       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+      [title.trim(), subtitle || null, imageUrl || null, videoUrl || null, linkUrl || null, sortOrder ?? 0, isActive ?? true]
     );
     return res.status(201).json({ success: true, message: "Banner created", banner: formatBanner(result.rows[0]) });
   } catch (err) {
@@ -72,23 +73,25 @@ async function createBanner(req, res) {
 // ADMIN — PUT /api/banners/:id
 // ==================================================================
 async function updateBanner(req, res) {
-  const { title, subtitle, imageUrl, linkUrl, sortOrder, isActive } = req.body;
+  const { title, subtitle, imageUrl, videoUrl, linkUrl, sortOrder, isActive } = req.body;
   try {
     const result = await db.query(
       `UPDATE banners SET
          title      = COALESCE($1, title),
          subtitle   = COALESCE($2, subtitle),
          image_url  = COALESCE($3, image_url),
-         link_url   = COALESCE($4, link_url),
-         sort_order = COALESCE($5, sort_order),
-         is_active  = COALESCE($6, is_active),
+         video_url  = COALESCE($4, video_url),
+         link_url   = COALESCE($5, link_url),
+         sort_order = COALESCE($6, sort_order),
+         is_active  = COALESCE($7, is_active),
          updated_at = NOW()
-       WHERE id = $7
+       WHERE id = $8
        RETURNING *`,
       [
         title    || null,
         subtitle !== undefined ? subtitle : null,
         imageUrl || null,
+        videoUrl !== undefined ? videoUrl : null,
         linkUrl  !== undefined ? linkUrl  : null,
         sortOrder !== undefined ? sortOrder : null,
         isActive  !== undefined ? isActive  : null,
