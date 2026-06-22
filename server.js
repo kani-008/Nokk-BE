@@ -1,6 +1,7 @@
 const express = require("express");
 const cors    = require("cors");
 const morgan  = require("morgan");
+const os      = require("os");
 require("dotenv").config();
 
 require("./src/config/db.js"); // runs connection check on startup
@@ -14,6 +15,7 @@ const productRoute   = require("./src/routes/productRoute.js");
 const cartRoute      = require("./src/routes/cartRoute.js");
 const wishlistRoute  = require("./src/routes/wishlistRoute.js");
 const bannerRoute    = require("./src/routes/bannerRoute.js");
+const btextRoute     = require("./src/routes/btextRoute.js");
 const couponRoute    = require("./src/routes/couponRoute.js");
 const offersRoute    = require("./src/routes/offersRoute.js");
 const inventoryRoute = require("./src/routes/inventoryRoute.js");
@@ -22,9 +24,10 @@ const dashboardRoute = require("./src/routes/dashboardRoute.js");
 
 const app  = express();
 const PORT = process.env.PORT || 5000;
+const HOST = "0.0.0.0"; // bind to all interfaces so phones on the same Wi-Fi can reach it
 
 // ── Global middleware ─────────────────────────────────────────────
-app.use(cors());
+app.use(cors()); // dev: allow all origins (phone LAN origin included)
 app.use(morgan("dev"));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -43,6 +46,7 @@ app.use("/api/products",   productRoute);    // public list | CRUD + variants + 
 app.use("/api/cart",       cartRoute);       // add, update, remove, clear (login required)
 app.use("/api/wishlist",   wishlistRoute);   // add, remove, clear (login required)
 app.use("/api/banners",    bannerRoute);     // public active | CRUD (admin)
+app.use("/api/btext",      btextRoute);      // public active by banner | CRUD (admin)
 app.use("/api/coupons",    couponRoute);     // validate (customer) | CRUD (admin)
 app.use("/api/offers",     offersRoute);     // public live | CRUD (admin)
 app.use("/api/inventory",  inventoryRoute);  // stock management (admin only)
@@ -61,11 +65,25 @@ app.use((err, req, res, next) => {
   res.status(500).json({ success: false, message: "Internal server error" });
 });
 
+// ── helper: find this machine's LAN IPv4 (e.g. 192.168.1.5) ────────
+function getLanIp() {
+  const nets = os.networkInterfaces();
+  for (const name of Object.keys(nets)) {
+    for (const net of nets[name] || []) {
+      if (net.family === "IPv4" && !net.internal) return net.address;
+    }
+  }
+  return "localhost";
+}
+
 // ── Start ─────────────────────────────────────────────────────────
-app.listen(PORT, () => {
+app.listen(PORT, HOST, () => {
+  const lanIp = getLanIp();
   console.log("=======================================================");
-  console.log(` NammaOorKaruvattuKadai backend on port ${PORT}`);
-  console.log(` Env: ${process.env.NODE_ENV || "development"}`);
+  console.log(` NammaOorKaruvattuKadai backend running`);
+  console.log(` Env:     ${process.env.NODE_ENV || "development"}`);
+  console.log(` Desktop: http://localhost:${PORT}`);
+  console.log(` Mobile:  http://${lanIp}:${PORT}   (same Wi-Fi)`);
   console.log("=======================================================");
 });
 

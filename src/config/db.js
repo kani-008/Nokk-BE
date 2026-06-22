@@ -14,8 +14,15 @@ const pool = new Pool({
   host:     DB_HOST,
   port:     Number(DB_PORT),
   database: DB_NAME,
-  ssl: { rejectUnauthorized: false }
+  ssl:      { rejectUnauthorized: false },
+  // Force IPv4 — avoids ETIMEDOUT when DNS resolves to an unreachable IPv6 address
+  connectionTimeoutMillis: 10000,
+  options:  "-c TimeZone=UTC"
 });
+
+// Monkey-patch pg to prefer IPv4
+const dns = require("dns");
+dns.setDefaultResultOrder("ipv4first");
 
 // Verify the connection works on startup
 pool.query('SELECT NOW()', (err, res) => {

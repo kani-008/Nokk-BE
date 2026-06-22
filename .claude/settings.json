@@ -4,7 +4,8 @@
       "Read(//k/program/Project/Nokk-FE/src/**)",
       "Read(//k/program/Project/Nokk-FE/**)",
       "Bash(node -e \"const bcrypt = require\\('bcryptjs'\\); bcrypt.hash\\('1234', 10\\).then\\(h => console.log\\(h\\)\\);\")",
-      "Bash(node -e \"const b=require\\('f:/project/Nokk-BE/node_modules/bcryptjs'\\);b.hash\\('1234',10\\).then\\(h=>console.log\\(h\\)\\)\")"
+      "Bash(node -e \"const b=require\\('f:/project/Nokk-BE/node_modules/bcryptjs'\\);b.hash\\('1234',10\\).then\\(h=>console.log\\(h\\)\\)\")",
+      "PowerShell(Stop-Process -Id \\(Get-NetTCPConnection -LocalPort 5000 -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess\\) -Force -ErrorAction SilentlyContinue; Write-Output \"Killed\")"
     ],
     "additionalDirectories": [
       "K:\\program\\Project\\Nokk-FE\\src\\ApiCall",
