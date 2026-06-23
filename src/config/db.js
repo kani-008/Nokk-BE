@@ -29,7 +29,7 @@ pool.query('SELECT NOW()', (err, res) => {
   if (err) {
     console.error('PostgreSQL pool failed to initialize:', err.message);
   } else {
-    console.log('Pool ready  |  server time:', res.rows[0].now);
+    console.log("db connected successfully");
   }
 });
 
