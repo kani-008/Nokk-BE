@@ -405,8 +405,8 @@ async function changeMyPassword(req, res) {
   if (!currentPassword || !newPassword) {
     return res.status(400).json({ success: false, message: "currentPassword and newPassword are required" });
   }
-  if (typeof newPassword !== "string" || newPassword.length < 8) {
-    return res.status(400).json({ success: false, message: "New password must be at least 8 characters" });
+  if (typeof newPassword !== "string" || newPassword.length < 6) {
+    return res.status(400).json({ success: false, message: "New password must be at least 6 characters" });
   }
 
   try {

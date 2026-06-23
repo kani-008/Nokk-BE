@@ -206,13 +206,14 @@ async function bulkUpdateStock(req, res) {
     return res.status(400).json({ success: false, message: "Maximum 100 variants per bulk update" });
   }
 
+  const client = await db.getClient();
   try {
-    await db.query("BEGIN");
+    await client.query("BEGIN");
 
     const results = [];
     for (const item of updates) {
       if (!item.variantId) continue;
-      const r = await db.query(
+      const r = await client.query(
         `UPDATE product_variants SET
            stock_qty     = COALESCE($1, stock_qty),
            price         = COALESCE($2, price),
@@ -230,16 +231,18 @@ async function bulkUpdateStock(req, res) {
       if (r.rows.length > 0) results.push(r.rows[0]);
     }
 
-    await db.query("COMMIT");
+    await client.query("COMMIT");
     return res.json({
       success: true,
       message: `${results.length} variant(s) updated`,
       updated: results
     });
   } catch (err) {
-    await db.query("ROLLBACK");
+    await client.query("ROLLBACK");
     logger.error("Bulk update stock error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
+  } finally {
+    client.release();
   }
 }
 

@@ -1,7 +1,10 @@
 const jwt    = require("jsonwebtoken");
 const logger = require("../utils/logger.js");
 
-const ACCESS_TOKEN_SECRET = process.env.ACCESS_TOKEN_SECRET || "dev_access_secret_change_me";
+const ACCESS_TOKEN_SECRET = process.env.ACCESS_TOKEN_SECRET;
+if (!ACCESS_TOKEN_SECRET) {
+  throw new Error("FATAL: ACCESS_TOKEN_SECRET env var must be set");
+}
 
 // Verifies the Bearer access token. Used by ALL protected routes.
 function verifyToken(req, res, next) {

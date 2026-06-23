@@ -26,10 +26,6 @@ async function getBanners(req, res) {
     const result = await db.query(
       `SELECT * FROM banners WHERE is_active = TRUE ORDER BY id ASC`
     );
-    if (result.rows.length === 0) {
-      log({ route: "GET /api/banners", status: 404, message: "No active banners found" });
-      return res.status(404).json({ success: false, message: "No active banners found" });
-    }
     log({ route: "GET /api/banners", status: 200, count: result.rows.length });
     return res.status(200).json({ success: true, banners: result.rows.map(formatBanner) });
   } catch (err) {

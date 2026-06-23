@@ -228,18 +228,18 @@ async function createProduct(req, res) {
 
   const finalSlug = (slug || makeSlug(nameEn));
 
+  const client = await db.getClient();
   try {
-    await db.query("BEGIN");
+    await client.query("BEGIN");
 
     // Slug uniqueness
-    const dup = await db.query("SELECT id FROM products WHERE slug = $1", [finalSlug]);
+    const dup = await client.query("SELECT id FROM products WHERE slug = $1", [finalSlug]);
     if (dup.rows.length > 0) {
-      await db.query("ROLLBACK");
-      return res.status(409).json({ success: false, message: "A product with this slug already exists" });
+      const e = new Error("A product with this slug already exists"); e.status = 409; throw e;
     }
 
     // Insert product
-    const prodRes = await db.query(
+    const prodRes = await client.query(
       `INSERT INTO products
          (name_en, name_ta, slug, description, how_to_use, storage_tips,
           category_id, is_bestseller, is_new, is_active)
@@ -256,18 +256,11 @@ async function createProduct(req, res) {
     // Insert variants
     for (const v of variants) {
       if (!v.weightLabel || !v.price) continue;
-      await db.query(
+      await client.query(
         `INSERT INTO product_variants
            (product_id, weight_grams, weight_label, price, compare_price, stock_qty, is_active)
          VALUES ($1,$2,$3,$4,$5,$6,TRUE)`,
-        [
-          product.id,
-          v.weightGrams || 0,
-          v.weightLabel,
-          v.price,
-          v.comparePrice || null,
-          v.stockQty     || 0
-        ]
+        [product.id, v.weightGrams || 0, v.weightLabel, v.price, v.comparePrice || null, v.stockQty || 0]
       );
     }
 
@@ -277,7 +270,7 @@ async function createProduct(req, res) {
       if (!img.imageUrl) continue;
       const isPrimary = img.isPrimary && !hasPrimary;
       if (isPrimary) hasPrimary = true;
-      await db.query(
+      await client.query(
         `INSERT INTO product_images (product_id, image_url, sort_order, is_primary)
          VALUES ($1,$2,$3,$4)`,
         [product.id, img.imageUrl, img.sortOrder || 0, isPrimary]
@@ -285,21 +278,26 @@ async function createProduct(req, res) {
     }
     // If no image marked primary, mark the first one
     if (images.length > 0 && !hasPrimary) {
-      await db.query(
+      await client.query(
         `UPDATE product_images SET is_primary = TRUE
          WHERE product_id = $1 AND sort_order = (SELECT MIN(sort_order) FROM product_images WHERE product_id = $1)`,
         [product.id]
       );
     }
 
-    await db.query("COMMIT");
+    await client.query("COMMIT");
 
     const { variants: v, images: i, reviews: r } = await fetchVariantsImagesReviews(product.id);
     return res.status(201).json({ success: true, message: "Product created", product: formatProduct(product, v, i, r) });
   } catch (err) {
-    await db.query("ROLLBACK");
+    await client.query("ROLLBACK");
+    if (err.status) {
+      return res.status(err.status).json({ success: false, message: err.message });
+    }
     logger.error("Create product error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
+  } finally {
+    client.release();
   }
 }
 

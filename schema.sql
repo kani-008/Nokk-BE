@@ -10,6 +10,8 @@ CREATE EXTENSION IF NOT EXISTS "pg_trgm"; -- for text search
 -- DROP EXISTING TABLES (For clean re-setup if needed)
 -- ============================================================
 DROP VIEW IF EXISTS v_products_with_price CASCADE;
+DROP TABLE IF EXISTS refresh_tokens CASCADE;
+DROP TABLE IF EXISTS btext CASCADE;
 DROP TABLE IF EXISTS settings CASCADE;
 DROP TABLE IF EXISTS return_requests CASCADE;
 DROP TABLE IF EXISTS order_timelines CASCADE;
@@ -225,6 +227,7 @@ CREATE TABLE banners (
   title           TEXT NOT NULL,
   subtitle        TEXT,
   image_url       TEXT NOT NULL,
+  video_url       TEXT,
   link_url        TEXT,
   sort_order      INTEGER DEFAULT 0,
   is_active       BOOLEAN DEFAULT TRUE,
@@ -299,6 +302,28 @@ CREATE TABLE settings (
   updated_at      TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- 19. Refresh tokens (auth session store)
+CREATE TABLE refresh_tokens (
+  id          BIGSERIAL PRIMARY KEY,
+  user_id     UUID REFERENCES users(id) ON DELETE CASCADE,
+  token       TEXT NOT NULL UNIQUE,
+  expires_at  TIMESTAMPTZ NOT NULL,
+  created_at  TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX idx_refresh_tokens_token   ON refresh_tokens(token);
+CREATE INDEX idx_refresh_tokens_user_id ON refresh_tokens(user_id);
+
+-- 20. Banner text overlays
+CREATE TABLE btext (
+  bt_id       BIGSERIAL PRIMARY KEY,
+  banner_id   INTEGER REFERENCES banners(id) ON DELETE CASCADE,
+  heading     TEXT NOT NULL,
+  subtext     TEXT,
+  is_active   BOOLEAN DEFAULT TRUE,
+  created_at  TIMESTAMPTZ DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- ============================================================
 -- VIEWS
 -- ============================================================
@@ -357,7 +382,7 @@ LEFT JOIN (
 -- admin123 hash: $2a$10$4SNxfU8BlW8LmL8gS3P28eGMgEyLcIAEUNtGEItoYUliTqjR2WfMm
 -- customer123 hash: $2a$10$JMHDNTIpwno3t16eptVxHO9Ij72.9AXmOnDPEF0ByguKlewrPbnwq
 INSERT INTO users (id, email, phone, full_name, role, status, email_verified, phone_verified, password_hash) VALUES
-('ad123456-7890-abcd-ef12-34567890abcd', 'admin@nammaoor.com', '9000011111', 'Admin Selvam', 'admin', 'active', TRUE, TRUE, '$2a$10$4SNxfU8BlW8LmL8gS3P28eGMgEyLcIAEUNtGEItoYUliTqjR2WfMm'),
+('ad123456-7890-abcd-ef12-34567890abcd', 'admin@nammaoor.com', '8778784819', 'Admin Selvam', 'admin', 'active', TRUE, TRUE, '$2a$10$4SNxfU8BlW8LmL8gS3P28eGMgEyLcIAEUNtGEItoYUliTqjR2WfMm'),
 ('bc123456-7890-abcd-ef12-34567890abcd', 'customer@gmail.com', '9876543210', 'Anbarasan M', 'customer', 'active', TRUE, TRUE, '$2a$10$JMHDNTIpwno3t16eptVxHO9Ij72.9AXmOnDPEF0ByguKlewrPbnwq');
 
 -- Addresses for Customer

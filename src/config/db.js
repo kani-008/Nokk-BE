@@ -38,5 +38,8 @@ module.exports = {
   // Always call db.query(text, params) — never build SQL with string concatenation.
   // The params array is the only safe way to pass user input into a query.
   query: (text, params) => pool.query(text, params),
+  // Check out a dedicated client for manual transactions (BEGIN/COMMIT/ROLLBACK).
+  // Caller must call client.release() in a finally block.
+  getClient: () => pool.connect(),
   pool
 };

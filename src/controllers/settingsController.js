@@ -38,13 +38,14 @@ async function updateSettings(req, res) {
     return res.status(400).json({ success: false, message: "No settings provided" });
   }
 
+  const client = await db.getClient();
   try {
-    await db.query("BEGIN");
+    await client.query("BEGIN");
 
     for (const [key, value] of entries) {
       // Reject empty or suspicious keys (only allow word chars + underscore)
       if (!/^\w+$/.test(key)) continue;
-      await db.query(
+      await client.query(
         `INSERT INTO settings (key, value, updated_at)
          VALUES ($1, $2, NOW())
          ON CONFLICT (key)
@@ -53,17 +54,19 @@ async function updateSettings(req, res) {
       );
     }
 
-    await db.query("COMMIT");
+    await client.query("COMMIT");
 
-    // Return the full updated settings
+    // Return the full updated settings (can use pool — transaction is done)
     const result = await db.query(`SELECT key, value FROM settings ORDER BY key ASC`);
     const settings = {};
     result.rows.forEach(r => { settings[r.key] = castValue(r.value); });
     return res.json({ success: true, message: "Settings updated", settings });
   } catch (err) {
-    await db.query("ROLLBACK");
+    await client.query("ROLLBACK");
     logger.error("Update settings error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
+  } finally {
+    client.release();
   }
 }
 

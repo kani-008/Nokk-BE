@@ -260,8 +260,7 @@ async function getLowStock(req, res) {
         p.name_en,
         p.name_ta,
         pv.weight_label,
-        pv.stock_qty,
-        pv.sku
+        pv.stock_qty
       FROM product_variants pv
       JOIN products p ON p.id = pv.product_id
       WHERE pv.is_active = TRUE AND pv.stock_qty <= 10
@@ -276,8 +275,7 @@ async function getLowStock(req, res) {
         productId:   r.product_id,
         name:        r.name_ta ? `${r.name_en} (${r.name_ta})` : r.name_en,
         weightLabel: r.weight_label,
-        stockQty:    parseInt(r.stock_qty),
-        sku:         r.sku
+        stockQty:    parseInt(r.stock_qty)
       }))
     });
   } catch (err) {

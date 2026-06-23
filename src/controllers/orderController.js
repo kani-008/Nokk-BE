@@ -109,14 +109,14 @@ async function fetchItemsAndTimelinesForOrders(orderIds) {
 }
 
 // ------------------------------------------------------------------
-// Generate unique ORD-XXXX id
+// Generate unique ORD-XXXX id (queryFn lets callers pass a client)
 // ------------------------------------------------------------------
-async function generateOrderId() {
+async function generateOrderId(queryFn) {
   let orderId, isUnique = false;
   while (!isUnique) {
     const rand = Math.floor(1000 + Math.random() * 9000);
     orderId = `ORD-${rand}`;
-    const check = await db.query("SELECT id FROM orders WHERE id = $1", [orderId]);
+    const check = await queryFn("SELECT id FROM orders WHERE id = $1", [orderId]);
     if (check.rows.length === 0) isUnique = true;
   }
   return orderId;
@@ -141,46 +141,45 @@ async function checkout(req, res) {
     return res.status(400).json({ success: false, message: "Incomplete address — fullName, phone, addressLine1, city, pincode required" });
   }
 
+  const client = await db.getClient();
   try {
-    await db.query("BEGIN");
+    await client.query("BEGIN");
 
-    // Validate stock for every item before touching anything
+    // Lock variants, validate stock, and collect IDs in one pass.
+    // FOR UPDATE prevents two simultaneous checkouts overselling the same variant.
+    const resolvedVariants = [];
     for (const item of items) {
-      const varRes = await db.query(
-        "SELECT id, stock_qty FROM product_variants WHERE product_id = $1 AND weight_label = $2 AND is_active = TRUE",
+      const varRes = await client.query(
+        "SELECT id, stock_qty FROM product_variants WHERE product_id = $1 AND weight_label = $2 AND is_active = TRUE FOR UPDATE",
         [item.productId, item.weight]
       );
       if (varRes.rows.length === 0) {
-        await db.query("ROLLBACK");
-        return res.status(400).json({ success: false, message: `Variant not found: ${item.nameEn} (${item.weight})` });
+        const e = new Error(`Variant not found: ${item.nameEn} (${item.weight})`);
+        e.status = 400;
+        throw e;
       }
       if (varRes.rows[0].stock_qty < item.quantity) {
-        await db.query("ROLLBACK");
-        return res.status(400).json({
-          success: false,
-          message: `Insufficient stock for ${item.nameEn} (${item.weight}). Available: ${varRes.rows[0].stock_qty}`
-        });
+        const e = new Error(`Insufficient stock for ${item.nameEn} (${item.weight}). Available: ${varRes.rows[0].stock_qty}`);
+        e.status = 400;
+        throw e;
       }
+      resolvedVariants.push(varRes.rows[0].id);
     }
 
-    // Deduct stock
-    for (const item of items) {
-      const varRes = await db.query(
-        "SELECT id FROM product_variants WHERE product_id = $1 AND weight_label = $2",
-        [item.productId, item.weight]
-      );
-      await db.query(
+    // Deduct stock using the variant IDs already known from the lock step
+    for (let i = 0; i < items.length; i++) {
+      await client.query(
         "UPDATE product_variants SET stock_qty = stock_qty - $1, updated_at = NOW() WHERE id = $2",
-        [item.quantity, varRes.rows[0].id]
+        [items[i].quantity, resolvedVariants[i]]
       );
     }
 
-    const orderId       = await generateOrderId();
+    const orderId       = await generateOrderId((sql, params) => client.query(sql, params));
     const paymentStatus = paymentMethod.toLowerCase().includes("cod") ? "pending" : "paid";
     const addrLine1     = address.addressLine1 || `${address.doorNo || ""} ${address.street || ""}`.trim();
 
     // Insert order
-    await db.query(
+    await client.query(
       `INSERT INTO orders (
          id, user_id, customer_name, customer_email, customer_phone,
          subtotal, delivery_charge, discount, coupon_applied, total,
@@ -199,40 +198,40 @@ async function checkout(req, res) {
       ]
     );
 
-    // Insert order items
-    for (const item of items) {
-      const varRes = await db.query(
-        "SELECT id FROM product_variants WHERE product_id = $1 AND weight_label = $2",
-        [item.productId, item.weight]
-      );
-      await db.query(
+    // Insert order items (variant IDs already resolved — no extra selects)
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      await client.query(
         `INSERT INTO order_items
            (order_id, product_id, variant_id, name_en, name_ta, weight, price, quantity)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-        [
-          orderId, item.productId,
-          varRes.rows[0]?.id || null,
-          item.nameEn, item.nameTa || null,
-          item.weight, item.price, item.quantity
-        ]
+        [orderId, item.productId, resolvedVariants[i], item.nameEn, item.nameTa || null,
+         item.weight, item.price, item.quantity]
+      );
+    }
+
+    // Track coupon usage so max_uses limits actually work
+    if (couponApplied) {
+      await client.query(
+        "UPDATE coupons SET usage_count = usage_count + 1 WHERE code = $1",
+        [couponApplied]
       );
     }
 
     // Initial timeline entry
-    await db.query(
+    await client.query(
       "INSERT INTO order_timelines (order_id, status, notes) VALUES ($1,'pending','Order placed by customer.')",
       [orderId]
     );
 
     // Clear user's cart
-    const cartRes = await db.query("SELECT id FROM carts WHERE user_id = $1", [req.user.id]);
+    const cartRes = await client.query("SELECT id FROM carts WHERE user_id = $1", [req.user.id]);
     if (cartRes.rows.length > 0) {
-      await db.query("DELETE FROM cart_items WHERE cart_id = $1", [cartRes.rows[0].id]);
+      await client.query("DELETE FROM cart_items WHERE cart_id = $1", [cartRes.rows[0].id]);
     }
 
-    await db.query("COMMIT");
+    await client.query("COMMIT");
 
-    // Uses single-order fetch (correct — only one order here)
     const { items: fmtItems, timeline } = await fetchItemsAndTimeline(orderId);
     const orderRow = await db.query("SELECT * FROM orders WHERE id = $1", [orderId]);
     return res.status(201).json({
@@ -241,9 +240,14 @@ async function checkout(req, res) {
       order:   formatOrder(orderRow.rows[0], fmtItems, timeline)
     });
   } catch (err) {
-    await db.query("ROLLBACK");
+    await client.query("ROLLBACK");
+    if (err.status) {
+      return res.status(err.status).json({ success: false, message: err.message });
+    }
     logger.error("Checkout error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
+  } finally {
+    client.release();
   }
 }
 
@@ -317,52 +321,56 @@ async function getMyOrderById(req, res) {
 // Only allowed when status is pending or confirmed.
 // ==================================================================
 async function cancelMyOrder(req, res) {
+  const client = await db.getClient();
   try {
-    await db.query("BEGIN");
-    const ordRes = await db.query(
+    await client.query("BEGIN");
+    const ordRes = await client.query(
       "SELECT * FROM orders WHERE id = $1 AND user_id = $2 FOR UPDATE",
       [req.params.id, req.user.id]
     );
     if (ordRes.rows.length === 0) {
-      await db.query("ROLLBACK");
-      return res.status(404).json({ success: false, message: "Order not found" });
+      const e = new Error("Order not found"); e.status = 404; throw e;
     }
     const ord = ordRes.rows[0];
     if (!["pending", "confirmed"].includes(ord.status)) {
-      await db.query("ROLLBACK");
-      return res.status(400).json({ success: false, message: `Cannot cancel an order with status: ${ord.status}` });
+      const e = new Error(`Cannot cancel an order with status: ${ord.status}`); e.status = 400; throw e;
     }
 
-    await db.query(
+    await client.query(
       "UPDATE orders SET status = 'cancelled', updated_at = NOW() WHERE id = $1",
       [req.params.id]
     );
 
     // Restore stock
-    const itemsRes = await db.query(
+    const itemsRes = await client.query(
       "SELECT variant_id, quantity FROM order_items WHERE order_id = $1",
       [req.params.id]
     );
     for (const item of itemsRes.rows) {
       if (item.variant_id) {
-        await db.query(
+        await client.query(
           "UPDATE product_variants SET stock_qty = stock_qty + $1, updated_at = NOW() WHERE id = $2",
           [item.quantity, item.variant_id]
         );
       }
     }
 
-    await db.query(
+    await client.query(
       "INSERT INTO order_timelines (order_id, status, notes) VALUES ($1,'cancelled','Order cancelled by customer.')",
       [req.params.id]
     );
 
-    await db.query("COMMIT");
+    await client.query("COMMIT");
     return res.json({ success: true, message: "Order cancelled successfully" });
   } catch (err) {
-    await db.query("ROLLBACK");
+    await client.query("ROLLBACK");
+    if (err.status) {
+      return res.status(err.status).json({ success: false, message: err.message });
+    }
     logger.error("Cancel order error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
+  } finally {
+    client.release();
   }
 }
 
@@ -376,49 +384,52 @@ async function requestReturn(req, res) {
   if (!reason) {
     return res.status(400).json({ success: false, message: "reason is required" });
   }
+  const client = await db.getClient();
   try {
-    await db.query("BEGIN");
-    const ordRes = await db.query(
+    await client.query("BEGIN");
+    const ordRes = await client.query(
       "SELECT * FROM orders WHERE id = $1 AND user_id = $2 FOR UPDATE",
       [req.params.id, req.user.id]
     );
     if (ordRes.rows.length === 0) {
-      await db.query("ROLLBACK");
-      return res.status(404).json({ success: false, message: "Order not found" });
+      const e = new Error("Order not found"); e.status = 404; throw e;
     }
     if (ordRes.rows[0].status !== "delivered") {
-      await db.query("ROLLBACK");
-      return res.status(400).json({ success: false, message: "Only delivered orders can be returned" });
+      const e = new Error("Only delivered orders can be returned"); e.status = 400; throw e;
     }
 
-    const existing = await db.query(
+    const existing = await client.query(
       "SELECT id FROM return_requests WHERE order_id = $1 AND user_id = $2",
       [req.params.id, req.user.id]
     );
     if (existing.rows.length > 0) {
-      await db.query("ROLLBACK");
-      return res.status(409).json({ success: false, message: "Return request already submitted for this order" });
+      const e = new Error("Return request already submitted for this order"); e.status = 409; throw e;
     }
 
-    await db.query(
+    await client.query(
       "UPDATE orders SET status = 'return_requested', updated_at = NOW() WHERE id = $1",
       [req.params.id]
     );
-    await db.query(
+    await client.query(
       "INSERT INTO return_requests (order_id, user_id, reason, details, status) VALUES ($1,$2,$3,$4,'requested')",
       [req.params.id, req.user.id, reason, details || null]
     );
-    await db.query(
+    await client.query(
       "INSERT INTO order_timelines (order_id, status, notes) VALUES ($1,'return_requested',$2)",
       [req.params.id, `Return requested. Reason: ${reason}`]
     );
 
-    await db.query("COMMIT");
+    await client.query("COMMIT");
     return res.json({ success: true, message: "Return request submitted successfully" });
   } catch (err) {
-    await db.query("ROLLBACK");
+    await client.query("ROLLBACK");
+    if (err.status) {
+      return res.status(err.status).json({ success: false, message: err.message });
+    }
     logger.error("Return request error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
+  } finally {
+    client.release();
   }
 }
 
@@ -511,21 +522,21 @@ async function adminUpdateStatus(req, res) {
     return res.status(400).json({ success: false, message: "status is required" });
   }
 
+  const client = await db.getClient();
   try {
-    await db.query("BEGIN");
+    await client.query("BEGIN");
 
-    const ordRes = await db.query(
+    const ordRes = await client.query(
       "SELECT status FROM orders WHERE id = $1 FOR UPDATE",
       [req.params.id]
     );
     if (ordRes.rows.length === 0) {
-      await db.query("ROLLBACK");
-      return res.status(404).json({ success: false, message: "Order not found" });
+      const e = new Error("Order not found"); e.status = 404; throw e;
     }
 
     const currentStatus = ordRes.rows[0].status;
 
-    await db.query(
+    await client.query(
       `UPDATE orders SET
          status          = $1,
          courier_name    = COALESCE($2, courier_name),
@@ -538,13 +549,13 @@ async function adminUpdateStatus(req, res) {
 
     // Restore stock if admin is cancelling an active order
     if (currentStatus !== "cancelled" && status === "cancelled") {
-      const itemsRes = await db.query(
+      const itemsRes = await client.query(
         "SELECT variant_id, quantity FROM order_items WHERE order_id = $1",
         [req.params.id]
       );
       for (const item of itemsRes.rows) {
         if (item.variant_id) {
-          await db.query(
+          await client.query(
             "UPDATE product_variants SET stock_qty = stock_qty + $1, updated_at = NOW() WHERE id = $2",
             [item.quantity, item.variant_id]
           );
@@ -552,17 +563,22 @@ async function adminUpdateStatus(req, res) {
       }
     }
 
-    await db.query(
+    await client.query(
       "INSERT INTO order_timelines (order_id, status, notes) VALUES ($1,$2,$3)",
       [req.params.id, status, notes || `Order status updated to: ${status}`]
     );
 
-    await db.query("COMMIT");
+    await client.query("COMMIT");
     return res.json({ success: true, message: "Order updated successfully" });
   } catch (err) {
-    await db.query("ROLLBACK");
+    await client.query("ROLLBACK");
+    if (err.status) {
+      return res.status(err.status).json({ success: false, message: err.message });
+    }
     logger.error("Admin update status error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
+  } finally {
+    client.release();
   }
 }
 
@@ -602,21 +618,21 @@ async function adminUpdateReturn(req, res) {
     return res.status(400).json({ success: false, message: "status must be approved, rejected or completed" });
   }
 
+  const client = await db.getClient();
   try {
-    await db.query("BEGIN");
+    await client.query("BEGIN");
 
-    const retRes = await db.query(
+    const retRes = await client.query(
       "SELECT * FROM return_requests WHERE id = $1 FOR UPDATE",
       [req.params.requestId]
     );
     if (retRes.rows.length === 0) {
-      await db.query("ROLLBACK");
-      return res.status(404).json({ success: false, message: "Return request not found" });
+      const e = new Error("Return request not found"); e.status = 404; throw e;
     }
 
     const ret = retRes.rows[0];
 
-    await db.query(
+    await client.query(
       "UPDATE return_requests SET status = $1, admin_notes = COALESCE($2, admin_notes), updated_at = NOW() WHERE id = $3",
       [status, adminNotes || null, ret.id]
     );
@@ -631,13 +647,13 @@ async function adminUpdateReturn(req, res) {
 
     // Restore stock on completion
     if (status === "completed") {
-      const itemsRes = await db.query(
+      const itemsRes = await client.query(
         "SELECT variant_id, quantity FROM order_items WHERE order_id = $1",
         [ret.order_id]
       );
       for (const item of itemsRes.rows) {
         if (item.variant_id) {
-          await db.query(
+          await client.query(
             "UPDATE product_variants SET stock_qty = stock_qty + $1, updated_at = NOW() WHERE id = $2",
             [item.quantity, item.variant_id]
           );
@@ -645,21 +661,26 @@ async function adminUpdateReturn(req, res) {
       }
     }
 
-    await db.query(
+    await client.query(
       "UPDATE orders SET status = $1, updated_at = NOW() WHERE id = $2",
       [newOrderStatus, ret.order_id]
     );
-    await db.query(
+    await client.query(
       "INSERT INTO order_timelines (order_id, status, notes) VALUES ($1,$2,$3)",
       [ret.order_id, newOrderStatus, tlNote]
     );
 
-    await db.query("COMMIT");
+    await client.query("COMMIT");
     return res.json({ success: true, message: "Return request updated successfully" });
   } catch (err) {
-    await db.query("ROLLBACK");
+    await client.query("ROLLBACK");
+    if (err.status) {
+      return res.status(err.status).json({ success: false, message: err.message });
+    }
     logger.error("Admin update return error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
+  } finally {
+    client.release();
   }
 }
 

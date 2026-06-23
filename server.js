@@ -8,7 +8,7 @@ require("dotenv").config();
 
 require("./src/config/db.js"); // runs connection check on startup
 
-// ── Routes ────────────────────────────────────────────────────────
+// ── Routes 
 const loginRoute     = require("./src/routes/loginRoutes.js");
 const userRoute      = require("./src/routes/userRoute.js");
 const orderRoute     = require("./src/routes/orderRoute.js");
@@ -23,6 +23,7 @@ const offersRoute    = require("./src/routes/offersRoute.js");
 const inventoryRoute = require("./src/routes/inventoryRoute.js");
 const settingsRoute  = require("./src/routes/settingsRoute.js");
 const dashboardRoute = require("./src/routes/dashboardRoute.js");
+const reportRoute    = require("./src/routes/reportRoute.js");
 
 const app  = express();
 const PORT = process.env.PORT || 5000;
@@ -54,6 +55,7 @@ app.use("/api/offers",     offersRoute);     // public live | CRUD (admin)
 app.use("/api/inventory",  inventoryRoute);  // stock management (admin only)
 app.use("/api/settings",   settingsRoute);   // public read | write (admin)
 app.use("/api/dashboard",  dashboardRoute);  // KPIs, reports, charts (admin only)
+app.use("/api/reports",    reportRoute);     // exportable reports (admin only)
 
 // ── 404 ───────────────────────────────────────────────────────────
 app.use((req, res) => {

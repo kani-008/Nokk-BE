@@ -1,13 +1,13 @@
 const jwt  = require("jsonwebtoken");
 const db   = require("../config/db");
 
-const ACCESS_TOKEN_SECRET  = process.env.ACCESS_TOKEN_SECRET  || "dev_access_secret_change_me";
-const REFRESH_TOKEN_SECRET = process.env.REFRESH_TOKEN_SECRET || "dev_refresh_secret_change_me";
+const ACCESS_TOKEN_SECRET  = process.env.ACCESS_TOKEN_SECRET;
+const REFRESH_TOKEN_SECRET = process.env.REFRESH_TOKEN_SECRET;
 const ACCESS_TOKEN_EXPIRY  = "15m";
 const REFRESH_TOKEN_TTL_DAYS = 30;
 
-if (!process.env.ACCESS_TOKEN_SECRET || !process.env.REFRESH_TOKEN_SECRET) {
-  console.warn("[jwtToken] WARNING: Using default JWT secrets — set ACCESS_TOKEN_SECRET and REFRESH_TOKEN_SECRET in .env");
+if (!ACCESS_TOKEN_SECRET || !REFRESH_TOKEN_SECRET) {
+  throw new Error("FATAL: ACCESS_TOKEN_SECRET and REFRESH_TOKEN_SECRET env vars must be set");
 }
 
 // ── Sign ────────────────────────────────────────────────────────────

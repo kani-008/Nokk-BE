@@ -1,16 +1,18 @@
-const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
 const jwt    = require("jsonwebtoken");
 const db     = require("../config/db.js");
 const logger = require("../utils/logger.js");
 
 // ------------------------------------------------------------------
-// Config (read from .env — see notes for the variables to add)
+// Config (read from .env)
 // ------------------------------------------------------------------
-const ACCESS_TOKEN_SECRET = process.env.ACCESS_TOKEN_SECRET || "dev_access_secret_change_me";
-const REFRESH_TOKEN_SECRET = process.env.REFRESH_TOKEN_SECRET || "dev_refresh_secret_change_me";
-const ACCESS_TOKEN_TTL = "15m";          // short-lived access token
-const REFRESH_TOKEN_TTL_DAYS = 7;        // long-lived refresh token
+const ACCESS_TOKEN_SECRET = process.env.ACCESS_TOKEN_SECRET;
+const REFRESH_TOKEN_SECRET = process.env.REFRESH_TOKEN_SECRET;
+if (!ACCESS_TOKEN_SECRET || !REFRESH_TOKEN_SECRET) {
+  throw new Error("FATAL: ACCESS_TOKEN_SECRET and REFRESH_TOKEN_SECRET env vars must be set");
+}
+const ACCESS_TOKEN_TTL = "15m";
+const REFRESH_TOKEN_TTL_DAYS = 7;
 
 // ------------------------------------------------------------------
 // Small inline validators
@@ -25,7 +27,7 @@ function normalizeIdentifier(v) {
   return isEmail(s) ? s.toLowerCase() : s;
 }
 function validatePassword(p) {
-  if (typeof p !== "string" || p.length < 8) return "Password must be at least 8 characters";
+  if (typeof p !== "string" || p.length < 6) return "Password must be at least 6 characters";
   if (p.length > 128) return "Password is too long";
   return null;
 }
@@ -50,18 +52,17 @@ function publicUser(u) {
 }
 
 // ------------------------------------------------------------------
-// SMS (inline). Right now it only logs to the console so you can read the
-// OTP while developing. Plug a provider (MSG91 / Fast2SMS / Twilio) here later.
+// Twilio Verify — handles OTP generation, delivery, and checking
 // ------------------------------------------------------------------
-async function sendSms(phone, message) {
-  logger.sms(`-> ${phone} | ${message}`);
-  return true;
-}
+const twilioClient = require("twilio")(
+  process.env.TWILIO_ACCOUNT_SID,
+  process.env.TWILIO_AUTH_TOKEN
+);
+const VERIFY_SID = process.env.TWILIO_VERIFY_SERVICE_SID;
 
-// Generate a 5-digit OTP from a cryptographically strong source.
-// Leading zeros are kept (e.g. "04821") so it's always 5 digits.
-function generateOtp() {
-  return String(crypto.randomInt(0, 100000)).padStart(5, "0");
+// Convert any Indian phone format to E.164 (+91XXXXXXXXXX)
+function toE164(phone) {
+  return `+91${phone.replace(/\D/g, "").slice(-10)}`;
 }
 
 // ==================================================================
@@ -197,8 +198,7 @@ async function logout(req, res) {
 // ==================================================================
 // POST /otp-create   -> otpgenerate
 // Body: { phone }
-// Generates a 5-digit OTP, stores it, and (SIMPLE/DEV MODE) returns it
-// to the frontend so you can test without an SMS gateway.
+// Triggers Twilio Verify to generate and SMS the OTP to the user.
 // ==================================================================
 async function otpgenerate(req, res) {
   const phone = req.body.phone ? String(req.body.phone).trim() : "";
@@ -211,27 +211,13 @@ async function otpgenerate(req, res) {
     if (userRes.rows.length === 0) {
       return res.status(404).json({ success: false, message: "No account found with this phone number" });
     }
-    const user = userRes.rows[0];
 
-    // Invalidate any earlier unused OTPs so only the newest works.
-    await db.query(
-      "UPDATE otp_verifications SET verified = TRUE WHERE user_id = $1 AND verified = FALSE",
-      [user.id]
-    );
+    await twilioClient.verify.v2.services(VERIFY_SID)
+      .verifications
+      .create({ to: toE164(phone), channel: "sms" });
 
-    const otp = generateOtp();
-    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
-
-    await db.query(
-      "INSERT INTO otp_verifications (user_id, phone, otp_code, expires_at) VALUES ($1, $2, $3, $4)",
-      [user.id, phone, otp, expiresAt]
-    );
-
-    await sendSms(phone, `Your OTP is ${otp}. It expires in 10 minutes.`);
-
-    // SIMPLE/DEV MODE: send the OTP back to the frontend (no SMS gateway yet).
-    // >>> In production, DELETE `otp` from this response so it isn't exposed. <<<
-    return res.json({ success: true, message: "OTP sent", otp });
+    logger.sms(`Twilio Verify OTP sent -> ${toE164(phone)}`);
+    return res.json({ success: true, message: "OTP sent" });
   } catch (err) {
     logger.error("OTP create error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
@@ -241,11 +227,12 @@ async function otpgenerate(req, res) {
 // ==================================================================
 // POST /otp-verify   -> otpverify
 // Body: { phone, otp }
-// Marks the OTP verified so the user may then set a new password.
+// Checks the OTP via Twilio Verify, then records a verified session in
+// the DB so /reset-password can proceed.
 // ==================================================================
 async function otpverify(req, res) {
   const phone = req.body.phone ? String(req.body.phone).trim() : "";
-  const otp = req.body.otp ? String(req.body.otp).trim() : "";
+  const otp   = req.body.otp   ? String(req.body.otp).trim()   : "";
 
   if (!phone || !otp) {
     return res.status(400).json({ success: false, message: "phone and otp are required" });
@@ -258,18 +245,23 @@ async function otpverify(req, res) {
     }
     const user = userRes.rows[0];
 
-    const otpRes = await db.query(
-      `SELECT id FROM otp_verifications
-       WHERE user_id = $1 AND phone = $2 AND otp_code = $3
-         AND verified = FALSE AND expires_at > NOW()
-       ORDER BY created_at DESC LIMIT 1`,
-      [user.id, phone, otp]
-    );
-    if (otpRes.rows.length === 0) {
+    const check = await twilioClient.verify.v2.services(VERIFY_SID)
+      .verificationChecks
+      .create({ to: toE164(phone), code: otp });
+
+    if (check.status !== "approved") {
       return res.status(400).json({ success: false, message: "Invalid or expired OTP" });
     }
 
-    await db.query("UPDATE otp_verifications SET verified = TRUE WHERE id = $1", [otpRes.rows[0].id]);
+    // Write a verified record so /reset-password has a DB gate to check.
+    // Clear any old sessions first so only this one is valid.
+    await db.query("DELETE FROM otp_verifications WHERE user_id = $1", [user.id]);
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 min to reset password
+    await db.query(
+      "INSERT INTO otp_verifications (user_id, phone, otp_code, verified, expires_at) VALUES ($1, $2, $3, TRUE, $4)",
+      [user.id, phone, otp, expiresAt]
+    );
+
     return res.json({ success: true, message: "OTP verified. You can now set a new password." });
   } catch (err) {
     logger.error("OTP verify error:", err.message);
@@ -330,8 +322,71 @@ async function setpassword(req, res) {
   }
 }
 
+// ==================================================================
+// POST /register   -> register
+// Body: { email, fullName, password, phone? }
+// Creates a new customer account and returns tokens (auto-login).
+// ==================================================================
+async function register(req, res) {
+  const { email, fullName, password, phone } = req.body;
+
+  if (!email || !fullName || !password) {
+    return res.status(400).json({ success: false, message: "email, fullName and password are required" });
+  }
+  if (!isEmail(email)) {
+    return res.status(400).json({ success: false, message: "Invalid email address" });
+  }
+  const pwErr = validatePassword(password);
+  if (pwErr) {
+    return res.status(400).json({ success: false, message: pwErr });
+  }
+
+  const normalizedEmail = email.trim().toLowerCase();
+  const normalizedPhone = phone ? String(phone).trim() : null;
+
+  try {
+    const existing = await db.query(
+      "SELECT id FROM users WHERE email = $1 OR ($2::text IS NOT NULL AND phone = $2)",
+      [normalizedEmail, normalizedPhone]
+    );
+    if (existing.rows.length > 0) {
+      return res.status(409).json({ success: false, message: "An account with this email or phone already exists" });
+    }
+
+    const passwordHash = await bcrypt.hash(password, 10);
+    const result = await db.query(
+      `INSERT INTO users (email, phone, full_name, role, status, password_hash)
+       VALUES ($1, $2, $3, 'customer', 'active', $4)
+       RETURNING *`,
+      [normalizedEmail, normalizedPhone, fullName.trim(), passwordHash]
+    );
+
+    const user = result.rows[0];
+    const accessToken  = signAccessToken(user);
+    const refreshToken = signRefreshToken(user);
+    const expiresAt    = new Date(Date.now() + REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000);
+
+    await db.query(
+      "INSERT INTO refresh_tokens (user_id, token, expires_at) VALUES ($1, $2, $3)",
+      [user.id, refreshToken, expiresAt]
+    );
+
+    return res.status(201).json({
+      success: true,
+      message: "Account created successfully",
+      accessToken,
+      refreshToken,
+      user: publicUser(user)
+    });
+  } catch (err) {
+    logger.error("Register error:", err.message);
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+}
+
 module.exports = {
   getlogin,
+  register,
   otpgenerate,
   otpverify,
   setpassword,
