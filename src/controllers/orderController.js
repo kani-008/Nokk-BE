@@ -309,22 +309,22 @@ async function getMyOrders(req, res) {
 // GET /api/orders/my/:id   (customer — own order detail)
 // ==================================================================
 async function getMyOrderById(req, res) {
-  const { id } = req.params;
-  log({ route: "GET /api/orders/my/:id", userId: req.user.id, orderId: id, status: "fetching own order detail" });
+  const { id } = req.query;
+  log({ route: "GET /api/orders/get-my-order", userId: req.user.id, orderId: id, status: "fetching own order detail" });
   try {
     const result = await db.query(
       "SELECT * FROM orders WHERE id = $1 AND user_id = $2",
       [id, req.user.id]
     );
     if (result.rows.length === 0) {
-      log({ route: "GET /api/orders/my/:id", userId: req.user.id, orderId: id, status: 404, message: "Order not found" });
+      log({ route: "GET /api/orders/get-my-order", userId: req.user.id, orderId: id, status: 404, message: "Order not found" });
       return res.status(404).json({ success: false, message: "Order not found" });
     }
     const { items, timeline } = await fetchItemsAndTimeline(id);
-    log({ route: "GET /api/orders/my/:id", userId: req.user.id, orderId: id, status: 200 });
+    log({ route: "GET /api/orders/get-my-order", userId: req.user.id, orderId: id, status: 200 });
     return res.json({ success: true, order: formatOrder(result.rows[0], items, timeline) });
   } catch (err) {
-    lerr({ route: "GET /api/orders/my/:id", userId: req.user.id, orderId: id, status: 500, error: err.message });
+    lerr({ route: "GET /api/orders/get-my-order", userId: req.user.id, orderId: id, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -334,8 +334,8 @@ async function getMyOrderById(req, res) {
 // Only allowed when status is pending or confirmed.
 // ==================================================================
 async function cancelMyOrder(req, res) {
-  const { id } = req.params;
-  log({ route: "POST /api/orders/my/:id/cancel", userId: req.user.id, orderId: id, status: "cancelling own order" });
+  const { id } = req.body;
+  log({ route: "POST /api/orders/cancel-my-order", userId: req.user.id, orderId: id, status: "cancelling own order" });
   const client = await db.getClient();
   try {
     await client.query("BEGIN");
@@ -376,15 +376,15 @@ async function cancelMyOrder(req, res) {
     );
 
     await client.query("COMMIT");
-    log({ route: "POST /api/orders/my/:id/cancel", userId: req.user.id, orderId: id, status: 200 });
+    log({ route: "POST /api/orders/cancel-my-order", userId: req.user.id, orderId: id, status: 200 });
     return res.json({ success: true, message: "Order cancelled successfully" });
   } catch (err) {
     await client.query("ROLLBACK");
     if (err.status) {
-      log({ route: "POST /api/orders/my/:id/cancel", userId: req.user.id, orderId: id, status: err.status, message: err.message });
+      log({ route: "POST /api/orders/cancel-my-order", userId: req.user.id, orderId: id, status: err.status, message: err.message });
       return res.status(err.status).json({ success: false, message: err.message });
     }
-    lerr({ route: "POST /api/orders/my/:id/cancel", userId: req.user.id, orderId: id, status: 500, error: err.message });
+    lerr({ route: "POST /api/orders/cancel-my-order", userId: req.user.id, orderId: id, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   } finally {
     client.release();
@@ -397,12 +397,11 @@ async function cancelMyOrder(req, res) {
 // Body: { reason, details? }
 // ==================================================================
 async function requestReturn(req, res) {
-  const { id } = req.params;
-  const { reason, details } = req.body;
-  log({ route: "POST /api/orders/my/:id/return", userId: req.user.id, orderId: id, body: { reason, details }, status: "requesting order return" });
+  const { id, reason, details } = req.body;
+  log({ route: "POST /api/orders/request-return", userId: req.user.id, orderId: id, body: { reason, details }, status: "requesting order return" });
 
   if (!reason) {
-    log({ route: "POST /api/orders/my/:id/return", userId: req.user.id, orderId: id, status: 400, message: "reason is required" });
+    log({ route: "POST /api/orders/request-return", userId: req.user.id, orderId: id, status: 400, message: "reason is required" });
     return res.status(400).json({ success: false, message: "reason is required" });
   }
   const client = await db.getClient();
@@ -441,15 +440,15 @@ async function requestReturn(req, res) {
     );
 
     await client.query("COMMIT");
-    log({ route: "POST /api/orders/my/:id/return", userId: req.user.id, orderId: id, status: 200 });
+    log({ route: "POST /api/orders/request-return", userId: req.user.id, orderId: id, status: 200 });
     return res.json({ success: true, message: "Return request submitted successfully" });
   } catch (err) {
     await client.query("ROLLBACK");
     if (err.status) {
-      log({ route: "POST /api/orders/my/:id/return", userId: req.user.id, orderId: id, status: err.status, message: err.message });
+      log({ route: "POST /api/orders/request-return", userId: req.user.id, orderId: id, status: err.status, message: err.message });
       return res.status(err.status).json({ success: false, message: err.message });
     }
-    lerr({ route: "POST /api/orders/my/:id/return", userId: req.user.id, orderId: id, status: 500, error: err.message });
+    lerr({ route: "POST /api/orders/request-return", userId: req.user.id, orderId: id, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   } finally {
     client.release();
@@ -520,22 +519,22 @@ async function adminGetAllOrders(req, res) {
 // Full single order detail.
 // ==================================================================
 async function adminGetOrderById(req, res) {
-  const { id } = req.params;
-  log({ route: "GET /api/orders/admin/:id", orderId: id, status: "admin fetching order detail" });
+  const { id } = req.query;
+  log({ route: "GET /api/orders/admin/get-order", orderId: id, status: "admin fetching order detail" });
   try {
     const result = await db.query(
       "SELECT * FROM orders WHERE id = $1",
       [id]
     );
     if (result.rows.length === 0) {
-      log({ route: "GET /api/orders/admin/:id", orderId: id, status: 404, message: "Order not found" });
+      log({ route: "GET /api/orders/admin/get-order", orderId: id, status: 404, message: "Order not found" });
       return res.status(404).json({ success: false, message: "Order not found" });
     }
     const { items, timeline } = await fetchItemsAndTimeline(id);
-    log({ route: "GET /api/orders/admin/:id", orderId: id, status: 200 });
+    log({ route: "GET /api/orders/admin/get-order", orderId: id, status: 200 });
     return res.json({ success: true, order: formatOrder(result.rows[0], items, timeline) });
   } catch (err) {
-    lerr({ route: "GET /api/orders/admin/:id", orderId: id, status: 500, error: err.message });
+    lerr({ route: "GET /api/orders/admin/get-order", orderId: id, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -546,12 +545,11 @@ async function adminGetOrderById(req, res) {
 // Body: { status, notes?, courierName?, trackingNumber?, trackingUrl? }
 // ==================================================================
 async function adminUpdateStatus(req, res) {
-  const { id } = req.params;
-  const { status, notes, courierName, trackingNumber, trackingUrl } = req.body;
-  log({ route: "PUT /api/orders/admin/:id/status", orderId: id, body: { status, notes, courierName, trackingNumber, trackingUrl }, status: "admin updating order status" });
+  const { id, status, notes, courierName, trackingNumber, trackingUrl } = req.body;
+  log({ route: "PUT /api/orders/admin/update-status", orderId: id, body: { status, notes, courierName, trackingNumber, trackingUrl }, status: "admin updating order status" });
 
   if (!status) {
-    log({ route: "PUT /api/orders/admin/:id/status", orderId: id, status: 400, message: "status is required" });
+    log({ route: "PUT /api/orders/admin/update-status", orderId: id, status: 400, message: "status is required" });
     return res.status(400).json({ success: false, message: "status is required" });
   }
 
@@ -602,15 +600,15 @@ async function adminUpdateStatus(req, res) {
     );
 
     await client.query("COMMIT");
-    log({ route: "PUT /api/orders/admin/:id/status", orderId: id, status: 200 });
+    log({ route: "PUT /api/orders/admin/update-status", orderId: id, status: 200 });
     return res.json({ success: true, message: "Order updated successfully" });
   } catch (err) {
     await client.query("ROLLBACK");
     if (err.status) {
-      log({ route: "PUT /api/orders/admin/:id/status", orderId: id, status: err.status, message: err.message });
+      log({ route: "PUT /api/orders/admin/update-status", orderId: id, status: err.status, message: err.message });
       return res.status(err.status).json({ success: false, message: err.message });
     }
-    lerr({ route: "PUT /api/orders/admin/:id/status", orderId: id, status: 500, error: err.message });
+    lerr({ route: "PUT /api/orders/admin/update-status", orderId: id, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   } finally {
     client.release();
@@ -649,12 +647,11 @@ async function adminGetReturns(req, res) {
 // completed → restores stock + marks order returned
 // ==================================================================
 async function adminUpdateReturn(req, res) {
-  const { requestId } = req.params;
-  const { status, adminNotes } = req.body;
-  log({ route: "PUT /api/orders/admin/returns/:requestId", requestId, body: { status, adminNotes }, status: "admin updating return request" });
+  const { requestId, status, adminNotes } = req.body;
+  log({ route: "PUT /api/orders/admin/update-return", requestId, body: { status, adminNotes }, status: "admin updating return request" });
   const validStatuses = ["approved", "rejected", "completed"];
   if (!status || !validStatuses.includes(status)) {
-    log({ route: "PUT /api/orders/admin/returns/:requestId", requestId, status: 400, message: "invalid status" });
+    log({ route: "PUT /api/orders/admin/update-return", requestId, status: 400, message: "invalid status" });
     return res.status(400).json({ success: false, message: "status must be approved, rejected or completed" });
   }
 
@@ -711,15 +708,15 @@ async function adminUpdateReturn(req, res) {
     );
 
     await client.query("COMMIT");
-    log({ route: "PUT /api/orders/admin/returns/:requestId", requestId, status: 200 });
+    log({ route: "PUT /api/orders/admin/update-return", requestId, status: 200 });
     return res.json({ success: true, message: "Return request updated successfully" });
   } catch (err) {
     await client.query("ROLLBACK");
     if (err.status) {
-      log({ route: "PUT /api/orders/admin/returns/:requestId", requestId, status: err.status, message: err.message });
+      log({ route: "PUT /api/orders/admin/update-return", requestId, status: err.status, message: err.message });
       return res.status(err.status).json({ success: false, message: err.message });
     }
-    lerr({ route: "PUT /api/orders/admin/returns/:requestId", requestId, status: 500, error: err.message });
+    lerr({ route: "PUT /api/orders/admin/update-return", requestId, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   } finally {
     client.release();

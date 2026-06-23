@@ -1,18 +1,19 @@
-const express  = require("express");
-const router   = express.Router();
+const express = require("express");
+const router = express.Router();
 const {
-  getInventory, getInventorySummary,
-  updateStock, bulkUpdateStock
+  getInventory,
+  getInventorySummary,
+  updateStock,
+  bulkUpdateStock,
 } = require("../controllers/inventoryController.js");
 const authenticate = require("../middleware/auth.js");
-const { isAdmin }  = require("../middleware/auth.js");
+const { isAdmin } = require("../middleware/auth.js");
 
 // All inventory routes — admin only
-router.use(authenticate, isAdmin);
+router.use(authenticate, isAdmin); // admin only
 
-router.get("/",                     getInventory);       // ?lowStock= ?outOfStock= ?category= ?search= ?page= ?limit=
-router.get("/summary",              getInventorySummary);
-router.put("/:variantId",           updateStock);
-router.post("/bulk-update",         bulkUpdateStock);
-
+router.get("/get-inventory", getInventory); // ?lowStock= ?outOfStock= ?category= ?search= ?page= ?limit=
+router.get("/get-summary", getInventorySummary);
+router.put("/update-stock", updateStock); // variantId -> body
+router.post("/bulk-update", bulkUpdateStock);
 module.exports = router;

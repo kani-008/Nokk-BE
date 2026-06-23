@@ -17,18 +17,17 @@ const {
 const authenticate = require("../middleware/auth.js");
 const { isAdmin } = require("../middleware/auth.js");
 
-// ── Customer routes (login required) ─────────────────────────────
+// Customer (login required)
 router.post("/checkout", authenticate, checkout);
-router.get("/getMyOrders", authenticate, getMyOrders);
-router.get("/my/:id", authenticate, getMyOrderById);
-router.post("/my/cancel", authenticate, cancelMyOrder);
-router.post("/my/return", authenticate, requestReturn);
+router.get("/get-my-orders", authenticate, getMyOrders);
+router.get("/get-my-order", authenticate, getMyOrderById); // ?id=
+router.post("/cancel-my-order", authenticate, cancelMyOrder); // id -> body
+router.post("/request-return", authenticate, requestReturn); // id -> body
 
-// ── Admin routes ──────────────────────────────────────────────────
-router.get("/admin/list", authenticate, isAdmin, adminGetAllOrders);
-router.get("/admin/returns", authenticate, isAdmin, adminGetReturns);
-router.get("/admin/:id", authenticate, isAdmin, adminGetOrderById);
-router.put("/admin/:id/status", authenticate, isAdmin, adminUpdateStatus);
-router.put("/admin/returns/:requestId",authenticate,isAdmin,adminUpdateReturn,);
-
+// Admin
+router.get("/admin/get-all", authenticate, isAdmin, adminGetAllOrders);
+router.get("/admin/get-returns", authenticate, isAdmin, adminGetReturns);
+router.get("/admin/get-order", authenticate, isAdmin, adminGetOrderById); // ?id=
+router.put("/admin/update-status", authenticate, isAdmin, adminUpdateStatus); // id -> body
+router.put("/admin/update-return", authenticate, isAdmin, adminUpdateReturn); // requestId -> body
 module.exports = router;

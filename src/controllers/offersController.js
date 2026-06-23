@@ -95,8 +95,8 @@ async function getAllOffers(req, res) {
 // Single offer detail.
 // ==================================================================
 async function getOfferById(req, res) {
-  const { id } = req.params;
-  log({ route: "GET /api/offers/:id", offerId: id, status: "fetching offer by id" });
+  const { id } = req.query;
+  log({ route: "GET /api/offers/getby-id", offerId: id, status: "fetching offer by id" });
   try {
     const result = await db.query(
       `SELECT o.*, p.name_en AS product_name, c.name_en AS category_name
@@ -107,13 +107,13 @@ async function getOfferById(req, res) {
       [id]
     );
     if (result.rows.length === 0) {
-      log({ route: "GET /api/offers/:id", offerId: id, status: 404, message: "Offer not found" });
+      log({ route: "GET /api/offers/getby-id", offerId: id, status: 404, message: "Offer not found" });
       return res.status(404).json({ success: false, message: "Offer not found" });
     }
-    log({ route: "GET /api/offers/:id", offerId: id, status: 200 });
+    log({ route: "GET /api/offers/getby-id", offerId: id, status: 200 });
     return res.json({ success: true, offer: formatOffer(result.rows[0]) });
   } catch (err) {
-    lerr({ route: "GET /api/offers/:id", offerId: id, status: 500, error: err.message });
+    lerr({ route: "GET /api/offers/getby-id", offerId: id, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -175,19 +175,18 @@ async function createOffer(req, res) {
 // Update an existing offer. Only send fields you want to change.
 // ==================================================================
 async function updateOffer(req, res) {
-  const { id } = req.params;
   const {
-    name, description, discountValue,
+    id, name, description, discountValue,
     productId, categoryId,
     minOrderValue, maxDiscount,
     startDate, endDate, isActive
   } = req.body;
-  log({ route: "PUT /api/offers/:id", offerId: id, body: { name, description, discountValue, productId, categoryId, minOrderValue, maxDiscount, startDate, endDate, isActive }, status: "updating offer" });
+  log({ route: "PUT /api/offers/update-offer", offerId: id, body: { name, description, discountValue, productId, categoryId, minOrderValue, maxDiscount, startDate, endDate, isActive }, status: "updating offer" });
 
   try {
     const existing = await db.query("SELECT id FROM offers WHERE id = $1", [id]);
     if (existing.rows.length === 0) {
-      log({ route: "PUT /api/offers/:id", offerId: id, status: 404, message: "Offer not found" });
+      log({ route: "PUT /api/offers/update-offer", offerId: id, status: 404, message: "Offer not found" });
       return res.status(404).json({ success: false, message: "Offer not found" });
     }
 
@@ -220,10 +219,10 @@ async function updateOffer(req, res) {
         id
       ]
     );
-    log({ route: "PUT /api/offers/:id", offerId: id, status: 200 });
+    log({ route: "PUT /api/offers/update-offer", offerId: id, status: 200 });
     return res.json({ success: true, message: "Offer updated", offer: formatOffer(result.rows[0]) });
   } catch (err) {
-    lerr({ route: "PUT /api/offers/:id", offerId: id, status: 500, error: err.message });
+    lerr({ route: "PUT /api/offers/update-offer", offerId: id, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -232,20 +231,20 @@ async function updateOffer(req, res) {
 // ADMIN — DELETE /api/offers/:id
 // ==================================================================
 async function deleteOffer(req, res) {
-  const { id } = req.params;
-  log({ route: "DELETE /api/offers/:id", offerId: id, status: "deleting offer" });
+  const { id } = req.body;
+  log({ route: "DELETE /api/offers/delete-offer", offerId: id, status: "deleting offer" });
   try {
     const result = await db.query(
       "DELETE FROM offers WHERE id = $1 RETURNING id", [id]
     );
     if (result.rows.length === 0) {
-      log({ route: "DELETE /api/offers/:id", offerId: id, status: 404, message: "Offer not found" });
+      log({ route: "DELETE /api/offers/delete-offer", offerId: id, status: 404, message: "Offer not found" });
       return res.status(404).json({ success: false, message: "Offer not found" });
     }
-    log({ route: "DELETE /api/offers/:id", offerId: id, status: 200 });
+    log({ route: "DELETE /api/offers/delete-offer", offerId: id, status: 200 });
     return res.json({ success: true, message: "Offer deleted" });
   } catch (err) {
-    lerr({ route: "DELETE /api/offers/:id", offerId: id, status: 500, error: err.message });
+    lerr({ route: "DELETE /api/offers/delete-offer", offerId: id, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }

@@ -4,11 +4,10 @@ const { getCart, addToCart, updateCartItem, removeCartItem, clearCart } = requir
 const authenticate = require("../middleware/auth.js");
 
 router.use(authenticate); // all cart routes require login
-
-router.get   ("/",          getCart);
-router.post  ("/",          addToCart);
-router.put   ("/:itemId",   updateCartItem);
-router.delete("/:itemId",   removeCartItem);
-router.delete("/",          clearCart);
+router.get   ("/get-cart",     getCart);
+router.post  ("/add-item",     addToCart);
+router.put   ("/update-item",  updateCartItem);   // itemId -> body
+router.delete("/remove-item",  removeCartItem);   // itemId -> body
+router.delete("/clear-cart",   clearCart);
 
 module.exports = router;

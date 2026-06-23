@@ -100,8 +100,8 @@ async function getAllUsers(req, res) {
 // Full user profile + addresses + order history + return requests.
 // ==================================================================
 async function getUserById(req, res) {
-  const { id } = req.params;
-  log({ route: "GET /api/users/:id", adminId: req.user?.id, targetUserId: id, status: "fetching user by id" });
+  const { id } = req.query;
+  log({ route: "GET /api/users/get-by-id", adminId: req.user?.id, targetUserId: id, status: "fetching user by id" });
 
   try {
     const userRes = await db.query(
@@ -111,7 +111,7 @@ async function getUserById(req, res) {
       [id]
     );
     if (userRes.rows.length === 0) {
-      log({ route: "GET /api/users/:id", adminId: req.user?.id, targetUserId: id, status: 404, message: "User not found" });
+      log({ route: "GET /api/users/get-by-id", adminId: req.user?.id, targetUserId: id, status: 404, message: "User not found" });
       return res.status(404).json({ success: false, message: "User not found" });
     }
 
@@ -151,7 +151,7 @@ async function getUserById(req, res) {
 
     const s = statsRes.rows[0];
 
-    log({ route: "GET /api/users/:id", adminId: req.user?.id, targetUserId: id, status: 200 });
+    log({ route: "GET /api/users/get-by-id", adminId: req.user?.id, targetUserId: id, status: 200 });
     return res.json({
       success: true,
       user: publicUser(userRes.rows[0]),
@@ -166,7 +166,7 @@ async function getUserById(req, res) {
       returnRequests: returnsRes.rows
     });
   } catch (err) {
-    lerr({ route: "GET /api/users/:id", adminId: req.user?.id, targetUserId: id, status: 500, error: err.message });
+    lerr({ route: "GET /api/users/get-by-id", adminId: req.user?.id, targetUserId: id, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -178,18 +178,17 @@ async function getUserById(req, res) {
 // password_hash is intentionally excluded — use reset-password flow.
 // ==================================================================
 async function adminUpdateUser(req, res) {
-  const { id } = req.params;
   const {
-    fullName, email, phone, avatarUrl,
+    id, fullName, email, phone, avatarUrl,
     role, status, emailVerified, phoneVerified
   } = req.body;
 
-  log({ route: "PUT /api/users/:id", adminId: req.user?.id, targetUserId: id, body: { fullName, email, phone, avatarUrl, role, status, emailVerified, phoneVerified }, status: "updating user as admin" });
+  log({ route: "PUT /api/users/update-user", adminId: req.user?.id, targetUserId: id, body: { fullName, email, phone, avatarUrl, role, status, emailVerified, phoneVerified }, status: "updating user as admin" });
 
   try {
     const existing = await db.query("SELECT id FROM users WHERE id = $1", [id]);
     if (existing.rows.length === 0) {
-      log({ route: "PUT /api/users/:id", adminId: req.user?.id, targetUserId: id, status: 404, message: "User not found" });
+      log({ route: "PUT /api/users/update-user", adminId: req.user?.id, targetUserId: id, status: 404, message: "User not found" });
       return res.status(404).json({ success: false, message: "User not found" });
     }
 
@@ -199,7 +198,7 @@ async function adminUpdateUser(req, res) {
         "SELECT id FROM users WHERE email = $1 AND id != $2", [email.trim().toLowerCase(), id]
       );
       if (dup.rows.length > 0) {
-        log({ route: "PUT /api/users/:id", adminId: req.user?.id, targetUserId: id, status: 409, message: "Email already in use" });
+        log({ route: "PUT /api/users/update-user", adminId: req.user?.id, targetUserId: id, status: 409, message: "Email already in use" });
         return res.status(409).json({ success: false, message: "Email already in use by another account" });
       }
     }
@@ -208,7 +207,7 @@ async function adminUpdateUser(req, res) {
         "SELECT id FROM users WHERE phone = $1 AND id != $2", [phone.trim(), id]
       );
       if (dup.rows.length > 0) {
-        log({ route: "PUT /api/users/:id", adminId: req.user?.id, targetUserId: id, status: 409, message: "Phone already in use" });
+        log({ route: "PUT /api/users/update-user", adminId: req.user?.id, targetUserId: id, status: 409, message: "Phone already in use" });
         return res.status(409).json({ success: false, message: "Phone already in use by another account" });
       }
     }
@@ -240,10 +239,10 @@ async function adminUpdateUser(req, res) {
       ]
     );
 
-    log({ route: "PUT /api/users/:id", adminId: req.user?.id, targetUserId: id, status: 200 });
+    log({ route: "PUT /api/users/update-user", adminId: req.user?.id, targetUserId: id, status: 200 });
     return res.json({ success: true, message: "User updated", user: publicUser(result.rows[0]) });
   } catch (err) {
-    lerr({ route: "PUT /api/users/:id", adminId: req.user?.id, targetUserId: id, status: 500, error: err.message });
+    lerr({ route: "PUT /api/users/update-user", adminId: req.user?.id, targetUserId: id, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -253,13 +252,12 @@ async function adminUpdateUser(req, res) {
 // Block or unblock a user. Cannot block another admin.
 // ==================================================================
 async function toggleUserStatus(req, res) {
-  const { id }     = req.params;
-  const { status } = req.body; // 'active' | 'blocked'
+  const { id, status } = req.body; // 'active' | 'blocked'
 
-  log({ route: "PATCH /api/users/:id/status", adminId: req.user?.id, targetUserId: id, targetStatus: status, status: "toggling user status" });
+  log({ route: "PATCH /api/users/toggle-status", adminId: req.user?.id, targetUserId: id, targetStatus: status, status: "toggling user status" });
 
   if (!["active", "blocked"].includes(status)) {
-    log({ route: "PATCH /api/users/:id/status", adminId: req.user?.id, targetUserId: id, targetStatus: status, status: 400, message: "invalid status" });
+    log({ route: "PATCH /api/users/toggle-status", adminId: req.user?.id, targetUserId: id, targetStatus: status, status: 400, message: "invalid status" });
     return res.status(400).json({ success: false, message: "status must be 'active' or 'blocked'" });
   }
 
@@ -268,11 +266,11 @@ async function toggleUserStatus(req, res) {
       "SELECT id, role FROM users WHERE id = $1", [id]
     );
     if (existing.rows.length === 0) {
-      log({ route: "PATCH /api/users/:id/status", adminId: req.user?.id, targetUserId: id, targetStatus: status, status: 404, message: "User not found" });
+      log({ route: "PATCH /api/users/toggle-status", adminId: req.user?.id, targetUserId: id, targetStatus: status, status: 404, message: "User not found" });
       return res.status(404).json({ success: false, message: "User not found" });
     }
     if (existing.rows[0].role === "admin") {
-      log({ route: "PATCH /api/users/:id/status", adminId: req.user?.id, targetUserId: id, targetStatus: status, status: 403, message: "Cannot toggle status of admin" });
+      log({ route: "PATCH /api/users/toggle-status", adminId: req.user?.id, targetUserId: id, targetStatus: status, status: 403, message: "Cannot toggle status of admin" });
       return res.status(403).json({ success: false, message: "Cannot change status of an admin account" });
     }
 
@@ -281,13 +279,13 @@ async function toggleUserStatus(req, res) {
       [status, id]
     );
 
-    log({ route: "PATCH /api/users/:id/status", adminId: req.user?.id, targetUserId: id, targetStatus: status, status: 200 });
+    log({ route: "PATCH /api/users/toggle-status", adminId: req.user?.id, targetUserId: id, targetStatus: status, status: 200 });
     return res.json({
       success: true,
       message: `User ${status === "blocked" ? "blocked" : "unblocked"} successfully`
     });
   } catch (err) {
-    lerr({ route: "PATCH /api/users/:id/status", adminId: req.user?.id, targetUserId: id, targetStatus: status, status: 500, error: err.message });
+    lerr({ route: "PATCH /api/users/toggle-status", adminId: req.user?.id, targetUserId: id, targetStatus: status, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -297,24 +295,24 @@ async function toggleUserStatus(req, res) {
 // Permanently delete a user. Blocked if they have active/processing orders.
 // ==================================================================
 async function deleteUser(req, res) {
-  const { id } = req.params;
+  const { id } = req.body;
 
-  log({ route: "DELETE /api/users/:id", adminId: req.user?.id, targetUserId: id, status: "deleting user" });
+  log({ route: "DELETE /api/users/delete-user", adminId: req.user?.id, targetUserId: id, status: "deleting user" });
 
   // Prevent self-delete
   if (req.user.id === id) {
-    log({ route: "DELETE /api/users/:id", adminId: req.user?.id, targetUserId: id, status: 400, message: "Cannot self-delete" });
+    log({ route: "DELETE /api/users/delete-user", adminId: req.user?.id, targetUserId: id, status: 400, message: "Cannot self-delete" });
     return res.status(400).json({ success: false, message: "You cannot delete your own account" });
   }
 
   try {
     const existing = await db.query("SELECT id, role FROM users WHERE id = $1", [id]);
     if (existing.rows.length === 0) {
-      log({ route: "DELETE /api/users/:id", adminId: req.user?.id, targetUserId: id, status: 404, message: "User not found" });
+      log({ route: "DELETE /api/users/delete-user", adminId: req.user?.id, targetUserId: id, status: 404, message: "User not found" });
       return res.status(404).json({ success: false, message: "User not found" });
     }
     if (existing.rows[0].role === "admin") {
-      log({ route: "DELETE /api/users/:id", adminId: req.user?.id, targetUserId: id, status: 403, message: "Cannot delete admin account" });
+      log({ route: "DELETE /api/users/delete-user", adminId: req.user?.id, targetUserId: id, status: 403, message: "Cannot delete admin account" });
       return res.status(403).json({ success: false, message: "Cannot delete an admin account" });
     }
 
@@ -325,7 +323,7 @@ async function deleteUser(req, res) {
       [id]
     );
     if (parseInt(activeOrders.rows[0].c) > 0) {
-      log({ route: "DELETE /api/users/:id", adminId: req.user?.id, targetUserId: id, status: 409, message: "User has active orders" });
+      log({ route: "DELETE /api/users/delete-user", adminId: req.user?.id, targetUserId: id, status: 409, message: "User has active orders" });
       return res.status(409).json({
         success: false,
         message: "Cannot delete user — they have active orders in progress"
@@ -333,10 +331,10 @@ async function deleteUser(req, res) {
     }
 
     await db.query("DELETE FROM users WHERE id = $1", [id]);
-    log({ route: "DELETE /api/users/:id", adminId: req.user?.id, targetUserId: id, status: 200 });
+    log({ route: "DELETE /api/users/delete-user", adminId: req.user?.id, targetUserId: id, status: 200 });
     return res.json({ success: true, message: "User deleted permanently" });
   } catch (err) {
-    lerr({ route: "DELETE /api/users/:id", adminId: req.user?.id, targetUserId: id, status: 500, error: err.message });
+    lerr({ route: "DELETE /api/users/delete-user", adminId: req.user?.id, targetUserId: id, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -548,9 +546,8 @@ async function addAddress(req, res) {
 // ADDRESSES — PUT /api/users/me/addresses/:addressId
 // ==================================================================
 async function updateAddress(req, res) {
-  const { addressId } = req.params;
-  const { label, fullName, phone, addressLine1, addressLine2, city, state, pincode, isDefault } = req.body;
-  log({ route: "PUT /api/users/me/addresses/:addressId", userId: req.user?.id, addressId, label, fullName, phone, addressLine1, city, state, pincode, isDefault, status: "updating address" });
+  const { addressId, label, fullName, phone, addressLine1, addressLine2, city, state, pincode, isDefault } = req.body;
+  log({ route: "PUT /api/users/me/update-address", userId: req.user?.id, addressId, label, fullName, phone, addressLine1, city, state, pincode, isDefault, status: "updating address" });
 
   try {
     const existing = await db.query(
@@ -558,7 +555,7 @@ async function updateAddress(req, res) {
       [addressId, req.user.id]
     );
     if (existing.rows.length === 0) {
-      log({ route: "PUT /api/users/me/addresses/:addressId", userId: req.user?.id, addressId, status: 404, message: "Address not found" });
+      log({ route: "PUT /api/users/me/update-address", userId: req.user?.id, addressId, status: 404, message: "Address not found" });
       return res.status(404).json({ success: false, message: "Address not found" });
     }
 
@@ -599,10 +596,10 @@ async function updateAddress(req, res) {
       ]
     );
 
-    log({ route: "PUT /api/users/me/addresses/:addressId", userId: req.user?.id, addressId, status: 200 });
+    log({ route: "PUT /api/users/me/update-address", userId: req.user?.id, addressId, status: 200 });
     return res.json({ success: true, message: "Address updated", address: result.rows[0] });
   } catch (err) {
-    lerr({ route: "PUT /api/users/me/addresses/:addressId", userId: req.user?.id, addressId, status: 500, error: err.message });
+    lerr({ route: "PUT /api/users/me/update-address", userId: req.user?.id, addressId, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -611,8 +608,8 @@ async function updateAddress(req, res) {
 // ADDRESSES — DELETE /api/users/me/addresses/:addressId
 // ==================================================================
 async function deleteAddress(req, res) {
-  const { addressId } = req.params;
-  log({ route: "DELETE /api/users/me/addresses/:addressId", userId: req.user?.id, addressId, status: "deleting address" });
+  const { addressId } = req.body;
+  log({ route: "DELETE /api/users/me/delete-address", userId: req.user?.id, addressId, status: "deleting address" });
 
   try {
     const result = await db.query(
@@ -620,13 +617,13 @@ async function deleteAddress(req, res) {
       [addressId, req.user.id]
     );
     if (result.rows.length === 0) {
-      log({ route: "DELETE /api/users/me/addresses/:addressId", userId: req.user?.id, addressId, status: 404, message: "Address not found" });
+      log({ route: "DELETE /api/users/me/delete-address", userId: req.user?.id, addressId, status: 404, message: "Address not found" });
       return res.status(404).json({ success: false, message: "Address not found" });
     }
-    log({ route: "DELETE /api/users/me/addresses/:addressId", userId: req.user?.id, addressId, status: 200 });
+    log({ route: "DELETE /api/users/me/delete-address", userId: req.user?.id, addressId, status: 200 });
     return res.json({ success: true, message: "Address deleted" });
   } catch (err) {
-    lerr({ route: "DELETE /api/users/me/addresses/:addressId", userId: req.user?.id, addressId, status: 500, error: err.message });
+    lerr({ route: "DELETE /api/users/me/delete-address", userId: req.user?.id, addressId, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }

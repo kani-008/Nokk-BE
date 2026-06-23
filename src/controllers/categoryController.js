@@ -46,15 +46,15 @@ async function getAllCategories(req, res) {
 // Used by: Category landing page.
 // ==================================================================
 async function getCategoryBySlug(req, res) {
-  const { slug } = req.params;
-  log({ route: "GET /api/categories/:slug", slug, status: "fetching category by slug" });
+  const { slug } = req.query;
+  log({ route: "GET /api/categories/get-by-slug", slug, status: "fetching category by slug" });
   try {
     const catRes = await db.query(
       `SELECT * FROM categories WHERE slug = $1 AND is_active = TRUE`,
       [slug]
     );
     if (catRes.rows.length === 0) {
-      log({ route: "GET /api/categories/:slug", slug, status: 404, message: "Category not found" });
+      log({ route: "GET /api/categories/get-by-slug", slug, status: 404, message: "Category not found" });
       return res.status(404).json({ success: false, message: "Category not found" });
     }
 
@@ -73,7 +73,7 @@ async function getCategoryBySlug(req, res) {
       [catRes.rows[0].id]
     );
 
-    log({ route: "GET /api/categories/:slug", slug, status: 200, productCount: productRes.rows.length });
+    log({ route: "GET /api/categories/get-by-slug", slug, status: 200, productCount: productRes.rows.length });
     return res.json({
       success: true,
       category: formatCategory(catRes.rows[0]),
@@ -93,7 +93,7 @@ async function getCategoryBySlug(req, res) {
       }))
     });
   } catch (err) {
-    lerr({ route: "GET /api/categories/:slug", slug, status: 500, error: err.message });
+    lerr({ route: "GET /api/categories/get-by-slug", slug, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -147,14 +147,13 @@ async function createCategory(req, res) {
 // Update a category — any field.
 // ==================================================================
 async function updateCategory(req, res) {
-  const { id } = req.params;
-  const { nameEn, nameTa, slug, description, imageUrl, sortOrder, isActive } = req.body;
-  log({ route: "PUT /api/categories/:id", categoryId: id, body: { nameEn, nameTa, slug, description, imageUrl, sortOrder, isActive }, status: "updating category" });
+  const { id, nameEn, nameTa, slug, description, imageUrl, sortOrder, isActive } = req.body;
+  log({ route: "PUT /api/categories/update-category", categoryId: id, body: { nameEn, nameTa, slug, description, imageUrl, sortOrder, isActive }, status: "updating category" });
 
   try {
     const existing = await db.query("SELECT id FROM categories WHERE id = $1", [id]);
     if (existing.rows.length === 0) {
-      log({ route: "PUT /api/categories/:id", categoryId: id, status: 404, message: "Category not found" });
+      log({ route: "PUT /api/categories/update-category", categoryId: id, status: 404, message: "Category not found" });
       return res.status(404).json({ success: false, message: "Category not found" });
     }
 
@@ -165,7 +164,7 @@ async function updateCategory(req, res) {
         [slug.trim(), id]
       );
       if (dup.rows.length > 0) {
-        log({ route: "PUT /api/categories/:id", categoryId: id, status: 409, message: "slug already used" });
+        log({ route: "PUT /api/categories/update-category", categoryId: id, status: 409, message: "slug already used" });
         return res.status(409).json({ success: false, message: "Slug already used by another category" });
       }
     }
@@ -193,10 +192,10 @@ async function updateCategory(req, res) {
         id
       ]
     );
-    log({ route: "PUT /api/categories/:id", categoryId: id, status: 200 });
+    log({ route: "PUT /api/categories/update-category", categoryId: id, status: 200 });
     return res.json({ success: true, message: "Category updated", category: formatCategory(result.rows[0]) });
   } catch (err) {
-    lerr({ route: "PUT /api/categories/:id", categoryId: id, status: 500, error: err.message });
+    lerr({ route: "PUT /api/categories/update-category", categoryId: id, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -206,15 +205,15 @@ async function updateCategory(req, res) {
 // Blocked if any active products use this category.
 // ==================================================================
 async function deleteCategory(req, res) {
-  const { id } = req.params;
-  log({ route: "DELETE /api/categories/:id", categoryId: id, status: "deleting category" });
+  const { id } = req.body;
+  log({ route: "DELETE /api/categories/delete-category", categoryId: id, status: "deleting category" });
   try {
     const inUse = await db.query(
       "SELECT COUNT(*) AS c FROM products WHERE category_id = $1 AND is_active = TRUE",
       [id]
     );
     if (parseInt(inUse.rows[0].c) > 0) {
-      log({ route: "DELETE /api/categories/:id", categoryId: id, status: 409, message: "cannot delete - products in use" });
+      log({ route: "DELETE /api/categories/delete-category", categoryId: id, status: 409, message: "cannot delete - products in use" });
       return res.status(409).json({
         success: false,
         message: "Cannot delete — active products belong to this category. Deactivate them first."
@@ -222,13 +221,13 @@ async function deleteCategory(req, res) {
     }
     const result = await db.query("DELETE FROM categories WHERE id = $1 RETURNING id", [id]);
     if (result.rows.length === 0) {
-      log({ route: "DELETE /api/categories/:id", categoryId: id, status: 404, message: "Category not found" });
+      log({ route: "DELETE /api/categories/delete-category", categoryId: id, status: 404, message: "Category not found" });
       return res.status(404).json({ success: false, message: "Category not found" });
     }
-    log({ route: "DELETE /api/categories/:id", categoryId: id, status: 200 });
+    log({ route: "DELETE /api/categories/delete-category", categoryId: id, status: 200 });
     return res.json({ success: true, message: "Category deleted" });
   } catch (err) {
-    lerr({ route: "DELETE /api/categories/:id", categoryId: id, status: 500, error: err.message });
+    lerr({ route: "DELETE /api/categories/delete-category", categoryId: id, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }

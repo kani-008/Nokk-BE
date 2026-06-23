@@ -112,8 +112,8 @@ async function addToWishlist(req, res) {
 // Remove a product from wishlist.
 // ==================================================================
 async function removeFromWishlist(req, res) {
-  const { productId } = req.params;
-  log({ route: "DELETE /api/wishlist/:productId", userId: req.user?.id, productId, status: "removing from wishlist" });
+  const { productId } = req.body;
+  log({ route: "DELETE /api/wishlist/remove-item", userId: req.user?.id, productId, status: "removing from wishlist" });
 
   try {
     const result = await db.query(
@@ -121,14 +121,14 @@ async function removeFromWishlist(req, res) {
       [req.user.id, productId]
     );
     if (result.rows.length === 0) {
-      log({ route: "DELETE /api/wishlist/:productId", userId: req.user?.id, productId, status: 404, message: "Product not in wishlist" });
+      log({ route: "DELETE /api/wishlist/remove-item", userId: req.user?.id, productId, status: 404, message: "Product not in wishlist" });
       return res.status(404).json({ success: false, message: "Product not in wishlist" });
     }
     const items = await fetchWishlist(req.user.id);
-    log({ route: "DELETE /api/wishlist/:productId", userId: req.user?.id, productId, status: 200 });
+    log({ route: "DELETE /api/wishlist/remove-item", userId: req.user?.id, productId, status: 200 });
     return res.json({ success: true, message: "Removed from wishlist", wishlist: items, count: items.length });
   } catch (err) {
-    lerr({ route: "DELETE /api/wishlist/:productId", userId: req.user?.id, productId, status: 500, error: err.message });
+    lerr({ route: "DELETE /api/wishlist/remove-item", userId: req.user?.id, productId, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }

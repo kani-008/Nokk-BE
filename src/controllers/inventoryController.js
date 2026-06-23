@@ -145,17 +145,16 @@ async function getInventorySummary(req, res) {
 // This is the main "update stock" action from the inventory page.
 // ==================================================================
 async function updateStock(req, res) {
-  const { variantId } = req.params;
-  const { stockQty, price, comparePrice, isActive } = req.body;
-  log({ route: "PUT /api/inventory/:variantId", variantId, body: { stockQty, price, comparePrice, isActive }, status: "updating variant stock" });
+  const { variantId, stockQty, price, comparePrice, isActive } = req.body;
+  log({ route: "PUT /api/inventory/update-stock", variantId, body: { stockQty, price, comparePrice, isActive }, status: "updating variant stock" });
 
   if (stockQty === undefined && price === undefined &&
     comparePrice === undefined && isActive === undefined) {
-    log({ route: "PUT /api/inventory/:variantId", variantId, status: 400, message: "Nothing to update" });
+    log({ route: "PUT /api/inventory/update-stock", variantId, status: 400, message: "Nothing to update" });
     return res.status(400).json({ success: false, message: "Nothing to update" });
   }
   if (stockQty !== undefined && (isNaN(stockQty) || stockQty < 0)) {
-    log({ route: "PUT /api/inventory/:variantId", variantId, status: 400, message: "stockQty must be 0 or more" });
+    log({ route: "PUT /api/inventory/update-stock", variantId, status: 400, message: "stockQty must be 0 or more" });
     return res.status(400).json({ success: false, message: "stockQty must be 0 or more" });
   }
 
@@ -178,11 +177,11 @@ async function updateStock(req, res) {
       ]
     );
     if (result.rows.length === 0) {
-      log({ route: "PUT /api/inventory/:variantId", variantId, status: 404, message: "Variant not found" });
+      log({ route: "PUT /api/inventory/update-stock", variantId, status: 404, message: "Variant not found" });
       return res.status(404).json({ success: false, message: "Variant not found" });
     }
     const v = result.rows[0];
-    log({ route: "PUT /api/inventory/:variantId", variantId, status: 200 });
+    log({ route: "PUT /api/inventory/update-stock", variantId, status: 200 });
     return res.json({
       success: true,
       message: "Stock updated",
@@ -198,7 +197,7 @@ async function updateStock(req, res) {
       }
     });
   } catch (err) {
-    lerr({ route: "PUT /api/inventory/:variantId", variantId, status: 500, error: err.message });
+    lerr({ route: "PUT /api/inventory/update-stock", variantId, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }

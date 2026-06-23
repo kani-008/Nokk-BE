@@ -1,40 +1,45 @@
-const express  = require("express");
-const router   = express.Router();
+const express = require("express");
+const router = express.Router();
 
 const {
-  getAllProducts, getProductBySlug,
-  createProduct, updateProduct, deleteProduct,
-  addVariant, updateVariant, deleteVariant,
-  addImage, deleteImage,
-  addReview, deleteReview
+  getAllProducts,
+  getProductBySlug,
+  createProduct,
+  updateProduct,
+  deleteProduct,
+  addVariant,
+  updateVariant,
+  deleteVariant,
+  addImage,
+  deleteImage,
+  addReview,
+  deleteReview,
 } = require("../controllers/productController.js");
 
 const authenticate = require("../middleware/auth.js");
-const { isAdmin }  = require("../middleware/auth.js");
+const { isAdmin } = require("../middleware/auth.js");
 
-// ── Public ────────────────────────────────────────────────────────
-// ?category= ?search= ?sort= ?inStock= ?isBestseller= ?isNew= ?page= ?limit=
-router.get("/",           getAllProducts);
-router.get("/:slug",      getProductBySlug);
+// Public
+router.get("/get-all", getAllProducts); // ?category= ?search= ?sort= ?inStock= ?isBestseller= ?isNew= ?page= ?limit=
+router.get("/get-by-slug", getProductBySlug); // ?slug=
 
-// ── Customer (login required) ─────────────────────────────────────
-router.post("/:id/reviews",                  authenticate, addReview);
+// Customer (login required)
+router.post("/add-review", authenticate, addReview); // productId -> body
 
-// ── Admin ─────────────────────────────────────────────────────────
-router.post  ("/",                           authenticate, isAdmin, createProduct);
-router.put   ("/:id",                        authenticate, isAdmin, updateProduct);
-router.delete("/:id",                        authenticate, isAdmin, deleteProduct);
+// Admin — product
+router.post("/create-product", authenticate, isAdmin, createProduct);
+router.put("/update-product", authenticate, isAdmin, updateProduct); // id -> body
+router.delete("/delete-product", authenticate, isAdmin, deleteProduct); // id -> body
 
-// Variants
-router.post  ("/:id/variants",               authenticate, isAdmin, addVariant);
-router.put   ("/:id/variants/:variantId",    authenticate, isAdmin, updateVariant);
-router.delete("/:id/variants/:variantId",    authenticate, isAdmin, deleteVariant);
+// Admin — variants
+router.post("/add-variant", authenticate, isAdmin, addVariant); // productId -> body
+router.put("/update-variant", authenticate, isAdmin, updateVariant); // productId, variantId -> body
+router.delete("/delete-variant", authenticate, isAdmin, deleteVariant); // productId, variantId -> body
 
-// Images
-router.post  ("/:id/images",                 authenticate, isAdmin, addImage);
-router.delete("/:id/images/:imageId",        authenticate, isAdmin, deleteImage);
+// Admin — images
+router.post("/add-image", authenticate, isAdmin, addImage); // productId -> body
+router.delete("/delete-image", authenticate, isAdmin, deleteImage); // productId, imageId -> body
 
-// Reviews (admin delete)
-router.delete("/:id/reviews/:reviewId",      authenticate, isAdmin, deleteReview);
-
+// Admin — reviews
+router.delete("/delete-review", authenticate, isAdmin, deleteReview); // productId, reviewId -> body
 module.exports = router;

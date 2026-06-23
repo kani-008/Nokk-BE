@@ -57,21 +57,21 @@ async function getAllBtext(req, res) {
 // ADMIN — GET /api/btext/banner/:bannerId
 // ==================================================================
 async function getBtextForBanner(req, res) {
-  const { bannerId } = req.params;
-  log({ route: "GET /api/btext/banner/:bannerId", bannerId, status: "fetching all btext for banner" });
+  const { bannerId } = req.query;
+  log({ route: "GET /api/btext/get-for-banner", bannerId, status: "fetching all btext for banner" });
   if (!bannerId) {
-    log({ route: "GET /api/btext/banner/:bannerId", status: 400, message: "bannerId param is required" });
-    return res.status(400).json({ success: false, message: "bannerId param is required" });
+    log({ route: "GET /api/btext/get-for-banner", status: 400, message: "bannerId query param is required" });
+    return res.status(400).json({ success: false, message: "bannerId query param is required" });
   }
   try {
     const result = await db.query(
       `SELECT * FROM btext WHERE banner_id = $1 ORDER BY bt_id ASC`,
       [bannerId]
     );
-    log({ route: "GET /api/btext/banner/:bannerId", bannerId, status: 200, count: result.rows.length });
+    log({ route: "GET /api/btext/get-for-banner", bannerId, status: 200, count: result.rows.length });
     return res.status(200).json({ success: true, btexts: result.rows.map(formatBtext) });
   } catch (err) {
-    lerr({ route: "GET /api/btext/banner/:bannerId", bannerId, status: 500, error: err.message });
+    lerr({ route: "GET /api/btext/get-for-banner", bannerId, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -116,12 +116,11 @@ async function createBtext(req, res) {
 // ADMIN — PUT /api/btext/:id
 // ==================================================================
 async function updateBtext(req, res) {
-  const { id } = req.params;
-  const { heading, subtext, isActive } = req.body;
-  log({ route: "PUT /api/btext/:id", btextId: id, body: { heading, subtext, isActive } });
+  const { id, heading, subtext, isActive } = req.body;
+  log({ route: "PUT /api/btext/update-btext", btextId: id, body: { heading, subtext, isActive } });
   if (!id) {
     log({
-      route: "PUT /api/btext/:id",
+      route: "PUT /api/btext/update-btext",
       status: 400,
       message: "Btext id is required"
     });
@@ -144,13 +143,13 @@ async function updateBtext(req, res) {
       ]
     );
     if (result.rows.length === 0) {
-      log({ route: "PUT /api/btext/:id", btextId: id, status: 404, message: "Btext not found" });
+      log({ route: "PUT /api/btext/update-btext", btextId: id, status: 404, message: "Btext not found" });
       return res.status(404).json({ success: false, message: "Btext not found" });
     }
-    log({ route: "PUT /api/btext/:id", btextId: id, status: 200, message: "Btext updated" });
+    log({ route: "PUT /api/btext/update-btext", btextId: id, status: 200, message: "Btext updated" });
     return res.status(200).json({ success: true, message: "Btext updated", btext: formatBtext(result.rows[0]) });
   } catch (err) {
-    lerr({ route: "PUT /api/btext/:id", btextId: id, status: 500, error: err.message });
+    lerr({ route: "PUT /api/btext/update-btext", btextId: id, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -159,10 +158,10 @@ async function updateBtext(req, res) {
 // ADMIN — DELETE /api/btext/:id
 // ==================================================================
 async function deleteBtext(req, res) {
-  const { id } = req.params;
-  log({ route: "DELETE /api/btext/:id", btextId: id, status: "deleting" });
+  const { id } = req.body;
+  log({ route: "DELETE /api/btext/delete-btext", btextId: id, status: "deleting" });
   if (!id) {
-    log({ route: "DELETE /api/btext/:id", status: 400, message: "Btext id is required" });
+    log({ route: "DELETE /api/btext/delete-btext", status: 400, message: "Btext id is required" });
     return res.status(400).json({ success: false, message: "Btext id is required" });
   }
   try {
@@ -171,13 +170,13 @@ async function deleteBtext(req, res) {
       [id]
     );
     if (result.rows.length === 0) {
-      log({ route: "DELETE /api/btext/:id", btextId: id, status: 404, message: "Btext not found" });
+      log({ route: "DELETE /api/btext/delete-btext", btextId: id, status: 404, message: "Btext not found" });
       return res.status(404).json({ success: false, message: "Btext not found" });
     }
-    log({ route: "DELETE /api/btext/:id", btextId: id, status: 200, message: "Btext deleted" });
+    log({ route: "DELETE /api/btext/delete-btext", btextId: id, status: 200, message: "Btext deleted" });
     return res.status(200).json({ success: true, message: "Btext deleted" });
   } catch (err) {
-    lerr({ route: "DELETE /api/btext/:id", btextId: id, status: 500, error: err.message });
+    lerr({ route: "DELETE /api/btext/delete-btext", btextId: id, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }

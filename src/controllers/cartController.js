@@ -162,12 +162,12 @@ async function addToCart(req, res) {
 // Body: { quantity }   — pass 0 to remove.
 // ==================================================================
 async function updateCartItem(req, res) {
-  const { itemId } = req.params;
+  const { itemId } = req.body;
   const quantity = parseInt(req.body.quantity);
-  log({ route: "PUT /api/cart/:itemId", userId: req.user.id, itemId, quantity, status: "updating cart item quantity" });
+  log({ route: "PUT /api/cart/update-item", userId: req.user.id, itemId, quantity, status: "updating cart item quantity" });
 
   if (isNaN(quantity) || quantity < 0) {
-    log({ route: "PUT /api/cart/:itemId", userId: req.user.id, itemId, status: 400, message: "quantity must be 0 or more" });
+    log({ route: "PUT /api/cart/update-item", userId: req.user.id, itemId, status: 400, message: "quantity must be 0 or more" });
     return res.status(400).json({ success: false, message: "quantity must be 0 or more" });
   }
 
@@ -183,7 +183,7 @@ async function updateCartItem(req, res) {
     );
 
     if (itemRes.rows.length === 0) {
-      log({ route: "PUT /api/cart/:itemId", userId: req.user.id, itemId, status: 404, message: "Cart item not found" });
+      log({ route: "PUT /api/cart/update-item", userId: req.user.id, itemId, status: 404, message: "Cart item not found" });
       return res.status(404).json({ success: false, message: "Cart item not found" });
     }
 
@@ -191,7 +191,7 @@ async function updateCartItem(req, res) {
       await db.query("DELETE FROM cart_items WHERE id = $1", [itemId]);
     } else {
       if (quantity > itemRes.rows[0].stock_qty) {
-        log({ route: "PUT /api/cart/:itemId", userId: req.user.id, itemId, status: 400, message: "insufficient stock" });
+        log({ route: "PUT /api/cart/update-item", userId: req.user.id, itemId, status: 400, message: "insufficient stock" });
         return res.status(400).json({
           success: false,
           message: `Only ${itemRes.rows[0].stock_qty} units available in stock`
@@ -204,10 +204,10 @@ async function updateCartItem(req, res) {
     }
 
     const cart = await fetchCart(req.user.id);
-    log({ route: "PUT /api/cart/:itemId", userId: req.user.id, itemId, status: 200 });
+    log({ route: "PUT /api/cart/update-item", userId: req.user.id, itemId, status: 200 });
     return res.json({ success: true, message: "Cart updated", cart });
   } catch (err) {
-    lerr({ route: "PUT /api/cart/:itemId", userId: req.user.id, itemId, status: 500, error: err.message });
+    lerr({ route: "PUT /api/cart/update-item", userId: req.user.id, itemId, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -217,8 +217,8 @@ async function updateCartItem(req, res) {
 // Remove a single item from the cart.
 // ==================================================================
 async function removeCartItem(req, res) {
-  const { itemId } = req.params;
-  log({ route: "DELETE /api/cart/:itemId", userId: req.user.id, itemId, status: "removing cart item" });
+  const { itemId } = req.body;
+  log({ route: "DELETE /api/cart/remove-item", userId: req.user.id, itemId, status: "removing cart item" });
   try {
     const result = await db.query(
       `DELETE FROM cart_items
@@ -228,14 +228,14 @@ async function removeCartItem(req, res) {
       [itemId, req.user.id]
     );
     if (result.rows.length === 0) {
-      log({ route: "DELETE /api/cart/:itemId", userId: req.user.id, itemId, status: 404, message: "Cart item not found" });
+      log({ route: "DELETE /api/cart/remove-item", userId: req.user.id, itemId, status: 404, message: "Cart item not found" });
       return res.status(404).json({ success: false, message: "Cart item not found" });
     }
     const cart = await fetchCart(req.user.id);
-    log({ route: "DELETE /api/cart/:itemId", userId: req.user.id, itemId, status: 200 });
+    log({ route: "DELETE /api/cart/remove-item", userId: req.user.id, itemId, status: 200 });
     return res.json({ success: true, message: "Item removed", cart });
   } catch (err) {
-    lerr({ route: "DELETE /api/cart/:itemId", userId: req.user.id, itemId, status: 500, error: err.message });
+    lerr({ route: "DELETE /api/cart/remove-item", userId: req.user.id, itemId, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }

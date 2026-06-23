@@ -172,12 +172,11 @@ async function createCoupon(req, res) {
 // ADMIN — PUT /api/coupons/:id
 // ==================================================================
 async function updateCoupon(req, res) {
-  const { id } = req.params;
   const {
-    discountPercent, discountFlat, freeShipping,
+    id, discountPercent, discountFlat, freeShipping,
     minOrder, maxUses, expiryDate, description, isActive
   } = req.body;
-  log({ route: "PUT /api/coupons/:id", couponId: id, body: { discountPercent, discountFlat, freeShipping, minOrder, maxUses, expiryDate, isActive }, status: "updating coupon" });
+  log({ route: "PUT /api/coupons/update-coupon", couponId: id, body: { discountPercent, discountFlat, freeShipping, minOrder, maxUses, expiryDate, isActive }, status: "updating coupon" });
 
   try {
     const result = await db.query(
@@ -206,13 +205,13 @@ async function updateCoupon(req, res) {
       ]
     );
     if (result.rows.length === 0) {
-      log({ route: "PUT /api/coupons/:id", couponId: id, status: 404, message: "Coupon not found" });
+      log({ route: "PUT /api/coupons/update-coupon", couponId: id, status: 404, message: "Coupon not found" });
       return res.status(404).json({ success: false, message: "Coupon not found" });
     }
-    log({ route: "PUT /api/coupons/:id", couponId: id, status: 200 });
+    log({ route: "PUT /api/coupons/update-coupon", couponId: id, status: 200 });
     return res.json({ success: true, message: "Coupon updated", coupon: formatCoupon(result.rows[0]) });
   } catch (err) {
-    lerr({ route: "PUT /api/coupons/:id", couponId: id, status: 500, error: err.message });
+    lerr({ route: "PUT /api/coupons/update-coupon", couponId: id, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -221,20 +220,20 @@ async function updateCoupon(req, res) {
 // ADMIN — DELETE /api/coupons/:id
 // ==================================================================
 async function deleteCoupon(req, res) {
-  const { id } = req.params;
-  log({ route: "DELETE /api/coupons/:id", couponId: id, status: "deleting coupon" });
+  const { id } = req.body;
+  log({ route: "DELETE /api/coupons/delete-coupon", couponId: id, status: "deleting coupon" });
   try {
     const result = await db.query(
       "DELETE FROM coupons WHERE id = $1 RETURNING id", [id]
     );
     if (result.rows.length === 0) {
-      log({ route: "DELETE /api/coupons/:id", couponId: id, status: 404, message: "Coupon not found" });
+      log({ route: "DELETE /api/coupons/delete-coupon", couponId: id, status: 404, message: "Coupon not found" });
       return res.status(404).json({ success: false, message: "Coupon not found" });
     }
-    log({ route: "DELETE /api/coupons/:id", couponId: id, status: 200 });
+    log({ route: "DELETE /api/coupons/delete-coupon", couponId: id, status: 200 });
     return res.json({ success: true, message: "Coupon deleted" });
   } catch (err) {
-    lerr({ route: "DELETE /api/coupons/:id", couponId: id, status: 500, error: err.message });
+    lerr({ route: "DELETE /api/coupons/delete-coupon", couponId: id, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }

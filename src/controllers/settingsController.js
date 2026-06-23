@@ -85,24 +85,24 @@ async function updateSettings(req, res) {
 // Read a single setting by key.
 // ==================================================================
 async function getSetting(req, res) {
-  const key = req.params.key;
-  log({ route: "GET /api/settings/:key", key, status: "fetching setting" });
+  const { key } = req.query;
+  log({ route: "GET /api/settings/get-one", key, status: "fetching setting" });
   try {
     const result = await db.query(
       "SELECT key, value FROM settings WHERE key = $1", [key]
     );
     if (result.rows.length === 0) {
-      log({ route: "GET /api/settings/:key", key, status: 404, message: "Setting not found" });
+      log({ route: "GET /api/settings/get-one", key, status: 404, message: "Setting not found" });
       return res.status(404).json({ success: false, message: "Setting not found" });
     }
-    log({ route: "GET /api/settings/:key", key, status: 200 });
+    log({ route: "GET /api/settings/get-one", key, status: 200 });
     return res.json({
       success: true,
       key: result.rows[0].key,
       value: castValue(result.rows[0].value)
     });
   } catch (err) {
-    lerr({ route: "GET /api/settings/:key", key, status: 500, error: err.message });
+    lerr({ route: "GET /api/settings/get-one", key, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
