@@ -19,10 +19,10 @@ const { isAdmin } = require("../middleware/auth.js");
 
 // ── Customer routes (login required) ─────────────────────────────
 router.post("/checkout", authenticate, checkout);
-router.get("/my", authenticate, getMyOrders);
+router.get("/getMyOrders", authenticate, getMyOrders);
 router.get("/my/:id", authenticate, getMyOrderById);
-router.post("/my/:id/cancel", authenticate, cancelMyOrder);
-router.post("/my/:id/return", authenticate, requestReturn);
+router.post("/my/cancel", authenticate, cancelMyOrder);
+router.post("/my/return", authenticate, requestReturn);
 
 // ── Admin routes ──────────────────────────────────────────────────
 router.get("/admin/list", authenticate, isAdmin, adminGetAllOrders);
