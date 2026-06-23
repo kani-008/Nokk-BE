@@ -49,8 +49,8 @@ async function getAllUsers(req, res) {
       FROM users u
       LEFT JOIN orders o ON o.user_id = u.id AND o.status NOT IN ('cancelled','returned')
       WHERE
-        ($1::text IS NULL OR u.role   = $1) AND
-        ($2::text IS NULL OR u.status = $2) AND
+        ($1::text IS NULL OR u.role::text   = $1) AND
+        ($2::text IS NULL OR u.status::text = $2) AND
         ($3::text IS NULL OR
           u.full_name ILIKE $3 OR
           u.email     ILIKE $3 OR
@@ -64,8 +64,8 @@ async function getAllUsers(req, res) {
     const countRes = await db.query(`
       SELECT COUNT(*) AS total FROM users
       WHERE
-        ($1::text IS NULL OR role   = $1) AND
-        ($2::text IS NULL OR status = $2) AND
+        ($1::text IS NULL OR role::text   = $1) AND
+        ($2::text IS NULL OR status::text = $2) AND
         ($3::text IS NULL OR full_name ILIKE $3 OR email ILIKE $3 OR phone ILIKE $3)
     `, [role, status, search]);
 
