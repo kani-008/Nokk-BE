@@ -1,4 +1,5 @@
-const db = require("../config/db.js");
+const db     = require("../config/db.js");
+const logger = require("../utils/logger.js");
 
 // Live offers table columns (from current_schema.sql dump):
 // id, name, description, discount_value, product_id, category_id,
@@ -55,7 +56,7 @@ async function getActiveOffers(req, res) {
     );
     return res.json({ success: true, offers: result.rows.map(formatOffer) });
   } catch (err) {
-    console.error("Get active offers error:", err.message);
+    logger.error("Get active offers error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -78,7 +79,7 @@ async function getAllOffers(req, res) {
     );
     return res.json({ success: true, offers: result.rows.map(formatOffer) });
   } catch (err) {
-    console.error("Get all offers error:", err.message);
+    logger.error("Get all offers error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -102,7 +103,7 @@ async function getOfferById(req, res) {
     }
     return res.json({ success: true, offer: formatOffer(result.rows[0]) });
   } catch (err) {
-    console.error("Get offer by id error:", err.message);
+    logger.error("Get offer by id error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -150,7 +151,7 @@ async function createOffer(req, res) {
     );
     return res.status(201).json({ success: true, message: "Offer created", offer: formatOffer(result.rows[0]) });
   } catch (err) {
-    console.error("Create offer error:", err.message);
+    logger.error("Create offer error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -204,7 +205,7 @@ async function updateOffer(req, res) {
     );
     return res.json({ success: true, message: "Offer updated", offer: formatOffer(result.rows[0]) });
   } catch (err) {
-    console.error("Update offer error:", err.message);
+    logger.error("Update offer error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -222,7 +223,7 @@ async function deleteOffer(req, res) {
     }
     return res.json({ success: true, message: "Offer deleted" });
   } catch (err) {
-    console.error("Delete offer error:", err.message);
+    logger.error("Delete offer error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }

@@ -1,4 +1,5 @@
-const db = require("../config/db.js");
+const db     = require("../config/db.js");
+const logger = require("../utils/logger.js");
 
 // Schema columns: id, code, discount_percent, discount_flat, free_shipping,
 //                 min_order, max_uses, expiry_date, usage_count,
@@ -83,7 +84,7 @@ async function validateCoupon(req, res) {
       freeShipping:   c.free_shipping
     });
   } catch (err) {
-    console.error("Validate coupon error:", err.message);
+    logger.error("Validate coupon error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -99,7 +100,7 @@ async function getAllCoupons(req, res) {
     );
     return res.json({ success: true, coupons: result.rows.map(formatCoupon) });
   } catch (err) {
-    console.error("Get all coupons error:", err.message);
+    logger.error("Get all coupons error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -147,7 +148,7 @@ async function createCoupon(req, res) {
     );
     return res.status(201).json({ success: true, message: "Coupon created", coupon: formatCoupon(result.rows[0]) });
   } catch (err) {
-    console.error("Create coupon error:", err.message);
+    logger.error("Create coupon error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -192,7 +193,7 @@ async function updateCoupon(req, res) {
     }
     return res.json({ success: true, message: "Coupon updated", coupon: formatCoupon(result.rows[0]) });
   } catch (err) {
-    console.error("Update coupon error:", err.message);
+    logger.error("Update coupon error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -210,7 +211,7 @@ async function deleteCoupon(req, res) {
     }
     return res.json({ success: true, message: "Coupon deleted" });
   } catch (err) {
-    console.error("Delete coupon error:", err.message);
+    logger.error("Delete coupon error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }

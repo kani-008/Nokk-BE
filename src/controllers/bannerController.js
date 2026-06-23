@@ -1,4 +1,5 @@
-const db = require("../config/db.js");
+const db     = require("../config/db.js");
+const logger = require("../utils/logger.js");
 
 function formatBanner(b) {
   return {
@@ -13,8 +14,8 @@ function formatBanner(b) {
   };
 }
 
-const log  = (data) => console.log(JSON.stringify(data, null, 2));
-const lerr = (data) => console.error(JSON.stringify(data, null, 2));
+const log  = (data) => logger.info(JSON.stringify(data));
+const lerr = (data) => logger.error(JSON.stringify(data));
 
 // ==================================================================
 // PUBLIC — GET /api/banners

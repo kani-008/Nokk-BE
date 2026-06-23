@@ -1,4 +1,5 @@
-const db = require("../config/db.js");
+const db     = require("../config/db.js");
+const logger = require("../utils/logger.js");
 
 // ------------------------------------------------------------------
 // Single JOIN query — returns all wishlist items with product details.
@@ -56,7 +57,7 @@ async function getWishlist(req, res) {
     const items = await fetchWishlist(req.user.id);
     return res.json({ success: true, wishlist: items, count: items.length });
   } catch (err) {
-    console.error("Get wishlist error:", err.message);
+    logger.error("Get wishlist error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -92,7 +93,7 @@ async function addToWishlist(req, res) {
     const items = await fetchWishlist(req.user.id);
     return res.status(201).json({ success: true, message: "Added to wishlist", wishlist: items, count: items.length });
   } catch (err) {
-    console.error("Add to wishlist error:", err.message);
+    logger.error("Add to wishlist error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -113,7 +114,7 @@ async function removeFromWishlist(req, res) {
     const items = await fetchWishlist(req.user.id);
     return res.json({ success: true, message: "Removed from wishlist", wishlist: items, count: items.length });
   } catch (err) {
-    console.error("Remove from wishlist error:", err.message);
+    logger.error("Remove from wishlist error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -127,7 +128,7 @@ async function clearWishlist(req, res) {
     await db.query("DELETE FROM wishlists WHERE user_id = $1", [req.user.id]);
     return res.json({ success: true, message: "Wishlist cleared", wishlist: [], count: 0 });
   } catch (err) {
-    console.error("Clear wishlist error:", err.message);
+    logger.error("Clear wishlist error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }

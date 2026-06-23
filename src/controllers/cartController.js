@@ -1,4 +1,5 @@
-const db = require("../config/db.js");
+const db     = require("../config/db.js");
+const logger = require("../utils/logger.js");
 
 // ------------------------------------------------------------------
 // Get or create the user's cart row, return the cart id.
@@ -78,7 +79,7 @@ async function getCart(req, res) {
     const cart = await fetchCart(req.user.id);
     return res.json({ success: true, cart });
   } catch (err) {
-    console.error("Get cart error:", err.message);
+    logger.error("Get cart error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -140,7 +141,7 @@ async function addToCart(req, res) {
     const cart = await fetchCart(req.user.id);
     return res.status(201).json({ success: true, message: "Item added to cart", cart });
   } catch (err) {
-    console.error("Add to cart error:", err.message);
+    logger.error("Add to cart error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -190,7 +191,7 @@ async function updateCartItem(req, res) {
     const cart = await fetchCart(req.user.id);
     return res.json({ success: true, message: "Cart updated", cart });
   } catch (err) {
-    console.error("Update cart item error:", err.message);
+    logger.error("Update cart item error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -214,7 +215,7 @@ async function removeCartItem(req, res) {
     const cart = await fetchCart(req.user.id);
     return res.json({ success: true, message: "Item removed", cart });
   } catch (err) {
-    console.error("Remove cart item error:", err.message);
+    logger.error("Remove cart item error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -232,7 +233,7 @@ async function clearCart(req, res) {
     );
     return res.json({ success: true, message: "Cart cleared", cart: { items: [], itemCount: 0, subtotal: 0 } });
   } catch (err) {
-    console.error("Clear cart error:", err.message);
+    logger.error("Clear cart error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }

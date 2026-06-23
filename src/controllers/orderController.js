@@ -1,4 +1,5 @@
-const db = require("../config/db.js");
+const db     = require("../config/db.js");
+const logger = require("../utils/logger.js");
 
 // ------------------------------------------------------------------
 // Helpers
@@ -241,7 +242,7 @@ async function checkout(req, res) {
     });
   } catch (err) {
     await db.query("ROLLBACK");
-    console.error("Checkout error:", err.message);
+    logger.error("Checkout error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -286,7 +287,7 @@ async function getMyOrders(req, res) {
       orders
     });
   } catch (err) {
-    console.error("Get my orders error:", err.message);
+    logger.error("Get my orders error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -306,7 +307,7 @@ async function getMyOrderById(req, res) {
     const { items, timeline } = await fetchItemsAndTimeline(req.params.id);
     return res.json({ success: true, order: formatOrder(result.rows[0], items, timeline) });
   } catch (err) {
-    console.error("Get my order detail error:", err.message);
+    logger.error("Get my order detail error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -360,7 +361,7 @@ async function cancelMyOrder(req, res) {
     return res.json({ success: true, message: "Order cancelled successfully" });
   } catch (err) {
     await db.query("ROLLBACK");
-    console.error("Cancel order error:", err.message);
+    logger.error("Cancel order error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -416,7 +417,7 @@ async function requestReturn(req, res) {
     return res.json({ success: true, message: "Return request submitted successfully" });
   } catch (err) {
     await db.query("ROLLBACK");
-    console.error("Return request error:", err.message);
+    logger.error("Return request error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -473,7 +474,7 @@ async function adminGetAllOrders(req, res) {
       orders
     });
   } catch (err) {
-    console.error("Admin get all orders error:", err.message);
+    logger.error("Admin get all orders error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -494,7 +495,7 @@ async function adminGetOrderById(req, res) {
     const { items, timeline } = await fetchItemsAndTimeline(req.params.id);
     return res.json({ success: true, order: formatOrder(result.rows[0], items, timeline) });
   } catch (err) {
-    console.error("Admin get order error:", err.message);
+    logger.error("Admin get order error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -560,7 +561,7 @@ async function adminUpdateStatus(req, res) {
     return res.json({ success: true, message: "Order updated successfully" });
   } catch (err) {
     await db.query("ROLLBACK");
-    console.error("Admin update status error:", err.message);
+    logger.error("Admin update status error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -583,7 +584,7 @@ async function adminGetReturns(req, res) {
     );
     return res.json({ success: true, returns: result.rows });
   } catch (err) {
-    console.error("Admin get returns error:", err.message);
+    logger.error("Admin get returns error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -657,7 +658,7 @@ async function adminUpdateReturn(req, res) {
     return res.json({ success: true, message: "Return request updated successfully" });
   } catch (err) {
     await db.query("ROLLBACK");
-    console.error("Admin update return error:", err.message);
+    logger.error("Admin update return error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }

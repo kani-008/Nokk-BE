@@ -1,4 +1,5 @@
-const db = require("../config/db.js");
+const db     = require("../config/db.js");
+const logger = require("../utils/logger.js");
 
 // ------------------------------------------------------------------
 // Helpers
@@ -176,7 +177,7 @@ async function getAllProducts(req, res) {
       products: result.rows.map(p => formatProduct(p))
     });
   } catch (err) {
-    console.error("Get all products error:", err.message);
+    logger.error("Get all products error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -198,7 +199,7 @@ async function getProductBySlug(req, res) {
     const { variants, images, reviews } = await fetchVariantsImagesReviews(result.rows[0].id);
     return res.json({ success: true, product: formatProduct(result.rows[0], variants, images, reviews) });
   } catch (err) {
-    console.error("Get product by slug error:", err.message);
+    logger.error("Get product by slug error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -297,7 +298,7 @@ async function createProduct(req, res) {
     return res.status(201).json({ success: true, message: "Product created", product: formatProduct(product, v, i, r) });
   } catch (err) {
     await db.query("ROLLBACK");
-    console.error("Create product error:", err.message);
+    logger.error("Create product error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -360,7 +361,7 @@ async function updateProduct(req, res) {
     const { variants, images, reviews } = await fetchVariantsImagesReviews(req.params.id);
     return res.json({ success: true, message: "Product updated", product: formatProduct(result.rows[0], variants, images, reviews) });
   } catch (err) {
-    console.error("Update product error:", err.message);
+    logger.error("Update product error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -380,7 +381,7 @@ async function deleteProduct(req, res) {
     }
     return res.json({ success: true, message: "Product deactivated (soft delete — order history preserved)" });
   } catch (err) {
-    console.error("Delete product error:", err.message);
+    logger.error("Delete product error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -404,7 +405,7 @@ async function addVariant(req, res) {
     );
     return res.status(201).json({ success: true, message: "Variant added", variant: formatVariant(result.rows[0]) });
   } catch (err) {
-    console.error("Add variant error:", err.message);
+    logger.error("Add variant error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -443,7 +444,7 @@ async function updateVariant(req, res) {
     }
     return res.json({ success: true, message: "Variant updated", variant: formatVariant(result.rows[0]) });
   } catch (err) {
-    console.error("Update variant error:", err.message);
+    logger.error("Update variant error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -462,7 +463,7 @@ async function deleteVariant(req, res) {
     }
     return res.json({ success: true, message: "Variant deleted" });
   } catch (err) {
-    console.error("Delete variant error:", err.message);
+    logger.error("Delete variant error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -491,7 +492,7 @@ async function addImage(req, res) {
     );
     return res.status(201).json({ success: true, message: "Image added", image: formatImage(result.rows[0]) });
   } catch (err) {
-    console.error("Add image error:", err.message);
+    logger.error("Add image error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -510,7 +511,7 @@ async function deleteImage(req, res) {
     }
     return res.json({ success: true, message: "Image deleted" });
   } catch (err) {
-    console.error("Delete image error:", err.message);
+    logger.error("Delete image error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -552,7 +553,7 @@ async function addReview(req, res) {
     );
     return res.status(201).json({ success: true, message: "Review submitted", review: formatReview(result.rows[0]) });
   } catch (err) {
-    console.error("Add review error:", err.message);
+    logger.error("Add review error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -571,7 +572,7 @@ async function deleteReview(req, res) {
     }
     return res.json({ success: true, message: "Review deleted" });
   } catch (err) {
-    console.error("Delete review error:", err.message);
+    logger.error("Delete review error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }

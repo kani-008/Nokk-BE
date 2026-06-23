@@ -2,73 +2,7 @@ const express = require("express");
 const cors    = require("cors");
 const morgan  = require("morgan");
 const os      = require("os");
-
-function formatConsoleValue(value) {
-  if (typeof value === "string") {
-    return value;
-  }
-
-  if (value instanceof Error) {
-    return JSON.stringify(
-      {
-        name: value.name,
-        message: value.message,
-        stack: value.stack,
-      },
-      null,
-      2
-    );
-  }
-
-  if (typeof value === "object" && value !== null) {
-    const seen = new WeakSet();
-    try {
-      return JSON.stringify(
-        value,
-        (key, currentValue) => {
-          if (typeof currentValue === "bigint") {
-            return currentValue.toString();
-          }
-          if (typeof currentValue === "object" && currentValue !== null) {
-            if (seen.has(currentValue)) {
-              return "[Circular]";
-            }
-            seen.add(currentValue);
-          }
-          if (currentValue instanceof Error) {
-            return {
-              name: currentValue.name,
-              message: currentValue.message,
-              stack: currentValue.stack,
-            };
-          }
-          return currentValue;
-        },
-        2
-      );
-    } catch (err) {
-      return String(value);
-    }
-  }
-
-  return String(value);
-}
-
-function formatConsoleArgs(args) {
-  return args.map(formatConsoleValue).join(" ");
-}
-
-const nativeConsole = {
-  log: console.log.bind(console),
-  error: console.error.bind(console),
-  warn: console.warn.bind(console),
-  info: console.info.bind(console),
-};
-
-console.log = (...args) => nativeConsole.log(formatConsoleArgs(args));
-console.error = (...args) => nativeConsole.error(formatConsoleArgs(args));
-console.warn = (...args) => nativeConsole.warn(formatConsoleArgs(args));
-console.info = (...args) => nativeConsole.info(formatConsoleArgs(args));
+const logger  = require("./src/utils/logger.js");
 
 require("dotenv").config();
 
@@ -129,7 +63,7 @@ app.use((req, res) => {
 // ── Global error handler ──────────────────────────────────────────
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
-  console.error("Unhandled error:", err.message);
+  logger.error("Unhandled error:", err.message);
   res.status(500).json({ success: false, message: "Internal server error" });
 });
 
@@ -147,12 +81,12 @@ function getLanIp() {
 // ── Start ─────────────────────────────────────────────────────────
 app.listen(PORT, HOST, () => {
   const lanIp = getLanIp();
-  console.log("=======================================================");
-  console.log(` NammaOorKaruvattuKadai backend running`);
-  console.log(` Env:     ${process.env.NODE_ENV || "development"}`);
-  console.log(` Desktop: http://localhost:${PORT}`);
-  console.log(` Mobile:  http://${lanIp}:${PORT}   (same Wi-Fi)`);
-  console.log("=======================================================");
+  logger.banner([
+    "NammaOorKaruvattuKadai  Backend",
+    `Env:     ${process.env.NODE_ENV || "development"}`,
+    `Local:   http://localhost:${PORT}`,
+    `Network: http://${lanIp}:${PORT}   (same Wi-Fi)`,
+  ]);
 });
 
 module.exports = app;

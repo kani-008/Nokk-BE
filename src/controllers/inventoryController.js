@@ -1,4 +1,5 @@
-const db = require("../config/db.js");
+const db     = require("../config/db.js");
+const logger = require("../utils/logger.js");
 
 // Inventory = product_variants table — all stock management lives here.
 // product_variants columns: id, product_id, weight_grams, weight_label,
@@ -102,7 +103,7 @@ async function getInventory(req, res) {
       }))
     });
   } catch (err) {
-    console.error("Get inventory error:", err.message);
+    logger.error("Get inventory error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -126,7 +127,7 @@ async function getInventorySummary(req, res) {
     );
     return res.json({ success: true, summary: result.rows[0] });
   } catch (err) {
-    console.error("Inventory summary error:", err.message);
+    logger.error("Inventory summary error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -185,7 +186,7 @@ async function updateStock(req, res) {
       }
     });
   } catch (err) {
-    console.error("Update stock error:", err.message);
+    logger.error("Update stock error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -237,7 +238,7 @@ async function bulkUpdateStock(req, res) {
     });
   } catch (err) {
     await db.query("ROLLBACK");
-    console.error("Bulk update stock error:", err.message);
+    logger.error("Bulk update stock error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }

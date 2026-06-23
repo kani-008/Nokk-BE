@@ -1,7 +1,8 @@
 const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
-const jwt = require("jsonwebtoken");
-const db = require("../config/db.js");
+const jwt    = require("jsonwebtoken");
+const db     = require("../config/db.js");
+const logger = require("../utils/logger.js");
 
 // ------------------------------------------------------------------
 // Config (read from .env — see notes for the variables to add)
@@ -53,7 +54,7 @@ function publicUser(u) {
 // OTP while developing. Plug a provider (MSG91 / Fast2SMS / Twilio) here later.
 // ------------------------------------------------------------------
 async function sendSms(phone, message) {
-  console.log(`[SMS -> ${phone}] ${message}`);
+  logger.sms(`-> ${phone} | ${message}`);
   return true;
 }
 
@@ -115,7 +116,7 @@ async function getlogin(req, res) {
       user: publicUser(user)
     });
   } catch (err) {
-    console.error("Login error:", err.message);
+    logger.error("Login error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -144,6 +145,7 @@ async function refreshAccessToken(req, res) {
     let payload;
     try {
       payload = jwt.verify(refreshToken, REFRESH_TOKEN_SECRET);
+      logger.debug("Refresh token payload:", payload);
     } catch (e) {
       return res.status(401).json({ success: false, message: "Invalid or expired refresh token" });
     }
@@ -164,7 +166,7 @@ async function refreshAccessToken(req, res) {
     const accessToken = signAccessToken(user);
     return res.json({ success: true, accessToken });
   } catch (err) {
-    console.error("Refresh error:", err.message);
+    logger.error("Refresh error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -187,7 +189,7 @@ async function logout(req, res) {
     }
     return res.json({ success: true, message: "Logged out successfully" });
   } catch (err) {
-    console.error("Logout error:", err.message);
+    logger.error("Logout error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -231,7 +233,7 @@ async function otpgenerate(req, res) {
     // >>> In production, DELETE `otp` from this response so it isn't exposed. <<<
     return res.json({ success: true, message: "OTP sent", otp });
   } catch (err) {
-    console.error("OTP create error:", err.message);
+    logger.error("OTP create error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -270,7 +272,7 @@ async function otpverify(req, res) {
     await db.query("UPDATE otp_verifications SET verified = TRUE WHERE id = $1", [otpRes.rows[0].id]);
     return res.json({ success: true, message: "OTP verified. You can now set a new password." });
   } catch (err) {
-    console.error("OTP verify error:", err.message);
+    logger.error("OTP verify error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -323,7 +325,7 @@ async function setpassword(req, res) {
 
     return res.json({ success: true, message: "Password reset successfully. Please log in." });
   } catch (err) {
-    console.error("Set password error:", err.message);
+    logger.error("Set password error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }

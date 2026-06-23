@@ -1,4 +1,5 @@
-const db = require("../config/db.js");
+const db     = require("../config/db.js");
+const logger = require("../utils/logger.js");
 
 // settings schema: key TEXT PK, value TEXT NOT NULL, updated_at
 // Auto-cast value: "true"/"false" → boolean, numeric strings → number.
@@ -21,7 +22,7 @@ async function getSettings(req, res) {
     result.rows.forEach(r => { settings[r.key] = castValue(r.value); });
     return res.json({ success: true, settings });
   } catch (err) {
-    console.error("Get settings error:", err.message);
+    logger.error("Get settings error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -61,7 +62,7 @@ async function updateSettings(req, res) {
     return res.json({ success: true, message: "Settings updated", settings });
   } catch (err) {
     await db.query("ROLLBACK");
-    console.error("Update settings error:", err.message);
+    logger.error("Update settings error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -84,7 +85,7 @@ async function getSetting(req, res) {
       value: castValue(result.rows[0].value)
     });
   } catch (err) {
-    console.error("Get setting error:", err.message);
+    logger.error("Get setting error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }

@@ -1,4 +1,5 @@
-const db = require("../config/db.js");
+const db     = require("../config/db.js");
+const logger = require("../utils/logger.js");
 
 // Shape for every category response — every column included
 function formatCategory(c) {
@@ -30,7 +31,7 @@ async function getAllCategories(req, res) {
     );
     return res.json({ success: true, categories: result.rows.map(formatCategory) });
   } catch (err) {
-    console.error("Get categories error:", err.message);
+    logger.error("Get categories error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -84,7 +85,7 @@ async function getCategoryBySlug(req, res) {
       }))
     });
   } catch (err) {
-    console.error("Get category by slug error:", err.message);
+    logger.error("Get category by slug error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -124,7 +125,7 @@ async function createCategory(req, res) {
     );
     return res.status(201).json({ success: true, message: "Category created", category: formatCategory(result.rows[0]) });
   } catch (err) {
-    console.error("Create category error:", err.message);
+    logger.error("Create category error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -178,7 +179,7 @@ async function updateCategory(req, res) {
     );
     return res.json({ success: true, message: "Category updated", category: formatCategory(result.rows[0]) });
   } catch (err) {
-    console.error("Update category error:", err.message);
+    logger.error("Update category error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -205,7 +206,7 @@ async function deleteCategory(req, res) {
     }
     return res.json({ success: true, message: "Category deleted" });
   } catch (err) {
-    console.error("Delete category error:", err.message);
+    logger.error("Delete category error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }

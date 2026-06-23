@@ -1,5 +1,6 @@
 const bcrypt = require("bcryptjs");
 const db     = require("../config/db.js");
+const logger = require("../utils/logger.js");
 
 // ------------------------------------------------------------------
 // Helpers
@@ -84,7 +85,7 @@ async function getAllUsers(req, res) {
       }))
     });
   } catch (err) {
-    console.error("Get all users error:", err.message);
+    logger.error("Get all users error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -157,7 +158,7 @@ async function getUserById(req, res) {
       returnRequests: returnsRes.rows
     });
   } catch (err) {
-    console.error("Get user by id error:", err.message);
+    logger.error("Get user by id error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -228,7 +229,7 @@ async function adminUpdateUser(req, res) {
 
     return res.json({ success: true, message: "User updated", user: publicUser(result.rows[0]) });
   } catch (err) {
-    console.error("Admin update user error:", err.message);
+    logger.error("Admin update user error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -266,7 +267,7 @@ async function toggleUserStatus(req, res) {
       message: `User ${status === "blocked" ? "blocked" : "unblocked"} successfully`
     });
   } catch (err) {
-    console.error("Toggle user status error:", err.message);
+    logger.error("Toggle user status error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -308,7 +309,7 @@ async function deleteUser(req, res) {
     await db.query("DELETE FROM users WHERE id = $1", [id]);
     return res.json({ success: true, message: "User deleted permanently" });
   } catch (err) {
-    console.error("Delete user error:", err.message);
+    logger.error("Delete user error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -342,7 +343,7 @@ async function getMyProfile(req, res) {
       addresses: addrRes.rows
     });
   } catch (err) {
-    console.error("Get my profile error:", err.message);
+    logger.error("Get my profile error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -389,7 +390,7 @@ async function updateMyProfile(req, res) {
 
     return res.json({ success: true, message: "Profile updated", user: publicUser(result.rows[0]) });
   } catch (err) {
-    console.error("Update my profile error:", err.message);
+    logger.error("Update my profile error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -429,7 +430,7 @@ async function changeMyPassword(req, res) {
 
     return res.json({ success: true, message: "Password changed. Please log in again." });
   } catch (err) {
-    console.error("Change password error:", err.message);
+    logger.error("Change password error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -448,7 +449,7 @@ async function getMyAddresses(req, res) {
     );
     return res.json({ success: true, addresses: result.rows });
   } catch (err) {
-    console.error("Get addresses error:", err.message);
+    logger.error("Get addresses error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -494,7 +495,7 @@ async function addAddress(req, res) {
 
     return res.status(201).json({ success: true, message: "Address added", address: result.rows[0] });
   } catch (err) {
-    console.error("Add address error:", err.message);
+    logger.error("Add address error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -554,7 +555,7 @@ async function updateAddress(req, res) {
 
     return res.json({ success: true, message: "Address updated", address: result.rows[0] });
   } catch (err) {
-    console.error("Update address error:", err.message);
+    logger.error("Update address error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -575,7 +576,7 @@ async function deleteAddress(req, res) {
     }
     return res.json({ success: true, message: "Address deleted" });
   } catch (err) {
-    console.error("Delete address error:", err.message);
+    logger.error("Delete address error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }

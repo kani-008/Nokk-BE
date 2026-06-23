@@ -1,10 +1,11 @@
 const { Pool } = require('pg');
 require('dotenv').config();
+const logger = require("../utils/logger.js");
 
 const { DB_USER, DB_PASSWORD, DB_HOST, DB_PORT, DB_NAME } = process.env;
 
 if (!DB_USER || !DB_PASSWORD || !DB_HOST || !DB_PORT || !DB_NAME) {
-  console.error('CRITICAL: One or more DB_* environment variables are missing!');
+  logger.error('CRITICAL: One or more DB_* environment variables are missing!');
   process.exit(1);
 }
 
@@ -27,9 +28,9 @@ dns.setDefaultResultOrder("ipv4first");
 // Verify the connection works on startup
 pool.query('SELECT NOW()', (err, res) => {
   if (err) {
-    console.error('PostgreSQL pool failed to initialize:', err.message);
+    logger.error('PostgreSQL pool failed to initialize:', err.message);
   } else {
-    console.log('PostgreSQL pool ready. Server time:', res.rows[0].now);
+    logger.db('Pool ready  |  server time:', res.rows[0].now);
   }
 });
 

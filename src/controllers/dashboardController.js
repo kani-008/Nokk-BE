@@ -1,4 +1,5 @@
-const db = require("../config/db.js");
+const db     = require("../config/db.js");
+const logger = require("../utils/logger.js");
 
 // ------------------------------------------------------------------
 // Helper: parse numeric safely
@@ -107,7 +108,7 @@ async function getSummary(req, res) {
       }
     });
   } catch (err) {
-    console.error("Dashboard summary error:", err.message);
+    logger.error("Dashboard summary error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -152,7 +153,7 @@ async function getRevenueChart(req, res) {
       }))
     });
   } catch (err) {
-    console.error("Revenue chart error:", err.message);
+    logger.error("Revenue chart error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -196,7 +197,7 @@ async function getTopProducts(req, res) {
       }))
     });
   } catch (err) {
-    console.error("Top products error:", err.message);
+    logger.error("Top products error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -239,7 +240,7 @@ async function getTopCustomers(req, res) {
       }))
     });
   } catch (err) {
-    console.error("Top customers error:", err.message);
+    logger.error("Top customers error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -280,7 +281,7 @@ async function getLowStock(req, res) {
       }))
     });
   } catch (err) {
-    console.error("Low stock error:", err.message);
+    logger.error("Low stock error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -322,7 +323,7 @@ async function getRecentOrders(req, res) {
       }))
     });
   } catch (err) {
-    console.error("Recent orders error:", err.message);
+    logger.error("Recent orders error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -358,7 +359,7 @@ async function getSalesByCategory(req, res) {
       }))
     });
   } catch (err) {
-    console.error("Sales by category error:", err.message);
+    logger.error("Sales by category error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -396,7 +397,7 @@ async function getReturnRequests(req, res) {
       returnRequests: result.rows
     });
   } catch (err) {
-    console.error("Return requests error:", err.message);
+    logger.error("Return requests error:", err.message);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
