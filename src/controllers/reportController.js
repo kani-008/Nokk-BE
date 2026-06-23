@@ -1,5 +1,7 @@
-const db     = require("../config/db.js");
-const logger = require("../utils/logger.js");
+const db = require("../config/db.js");
+
+const log = (data) => console.log(data);
+const lerr = (data) => console.error(data);
 
 const num = (v) => parseFloat(v) || 0;
 
@@ -7,11 +9,11 @@ const num = (v) => parseFloat(v) || 0;
 // Returns { clause, params, nextIdx } so callers can append more params.
 function dateRangeClause(from, to, col, startIdx) {
   const conditions = [];
-  const params     = [];
-  let   idx        = startIdx;
+  const params = [];
+  let idx = startIdx;
 
   if (from) { conditions.push(`${col} >= $${idx++}`); params.push(from); }
-  if (to)   { conditions.push(`${col} <  $${idx++}`); params.push(to);   }
+  if (to) { conditions.push(`${col} <  $${idx++}`); params.push(to); }
 
   const clause = conditions.length ? "AND " + conditions.join(" AND ") : "";
   return { clause, params, nextIdx: idx };
@@ -24,13 +26,15 @@ function dateRangeClause(from, to, col, startIdx) {
 //         ?page=1  ?limit=100
 // ==================================================================
 async function getOrderReport(req, res) {
-  const page   = Math.max(parseInt(req.query.page)  || 1, 1);
-  const limit  = Math.min(parseInt(req.query.limit) || 100, 1000);
+  const page = Math.max(parseInt(req.query.page) || 1, 1);
+  const limit = Math.min(parseInt(req.query.limit) || 100, 1000);
   const offset = (page - 1) * limit;
-  const from   = req.query.from   || null;
-  const to     = req.query.to     || null;
+  const from = req.query.from || null;
+  const to = req.query.to || null;
   const status = req.query.status || null;
   const payment = req.query.payment || null;
+
+  log({ route: "GET /api/reports/orders", page, limit, from, to, orderStatus: status, payment, status: "fetching order report" });
 
   const { clause: dateClause, params: dateParams, nextIdx } =
     dateRangeClause(from, to, "o.created_at", 3);
@@ -79,36 +83,37 @@ async function getOrderReport(req, res) {
       countParams
     );
 
+    log({ route: "GET /api/reports/orders", status: 200, count: result.rows.length });
     return res.json({
       success: true,
       pagination: {
         page, limit,
-        total:      parseInt(countRes.rows[0].total),
+        total: parseInt(countRes.rows[0].total),
         totalPages: Math.ceil(parseInt(countRes.rows[0].total) / limit)
       },
       report: result.rows.map(r => ({
-        orderId:       r.id,
-        customerName:  r.customer_name,
+        orderId: r.id,
+        customerName: r.customer_name,
         customerEmail: r.customer_email,
         customerPhone: r.customer_phone,
-        subtotal:      num(r.subtotal),
+        subtotal: num(r.subtotal),
         deliveryCharge: num(r.delivery_charge),
-        discount:      num(r.discount),
+        discount: num(r.discount),
         couponApplied: r.coupon_applied,
-        total:         num(r.total),
-        status:        r.status,
+        total: num(r.total),
+        status: r.status,
         paymentMethod: r.payment_method,
         paymentStatus: r.payment_status,
-        city:          r.shipping_city,
-        state:         r.shipping_state,
-        pincode:       r.shipping_pincode,
-        createdAt:     r.created_at,
-        itemCount:     parseInt(r.item_count),
-        totalUnits:    parseInt(r.total_units)
+        city: r.shipping_city,
+        state: r.shipping_state,
+        pincode: r.shipping_pincode,
+        createdAt: r.created_at,
+        itemCount: parseInt(r.item_count),
+        totalUnits: parseInt(r.total_units)
       }))
     });
   } catch (err) {
-    logger.error("Order report error:", err.message);
+    lerr({ route: "GET /api/reports/orders", status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -119,12 +124,14 @@ async function getOrderReport(req, res) {
 // Query: ?from=  ?to=  ?period=daily|weekly|monthly
 // ==================================================================
 async function getRevenueReport(req, res) {
-  const from   = req.query.from || null;
-  const to     = req.query.to   || null;
+  const from = req.query.from || null;
+  const to = req.query.to || null;
   const period = req.query.period || "daily";
 
+  log({ route: "GET /api/reports/revenue", from, to, period, status: "fetching revenue report" });
+
   const truncMap = { daily: "day", weekly: "week", monthly: "month" };
-  const trunc    = truncMap[period] || "day";
+  const trunc = truncMap[period] || "day";
 
   const { clause: dateClause, params: dateParams, nextIdx } =
     dateRangeClause(from, to, "created_at", 2);
@@ -160,27 +167,28 @@ async function getRevenueReport(req, res) {
     );
 
     const t = totals.rows[0];
+    log({ route: "GET /api/reports/revenue", status: 200, count: result.rows.length });
     return res.json({
       success: true,
       period,
       totals: {
-        orders:   parseInt(t.total_orders),
+        orders: parseInt(t.total_orders),
         subtotal: num(t.total_subtotal),
         delivery: num(t.total_delivery),
         discount: num(t.total_discount),
-        revenue:  num(t.total_revenue)
+        revenue: num(t.total_revenue)
       },
       breakdown: result.rows.map(r => ({
-        period:   r.period,
-        orders:   parseInt(r.orders),
+        period: r.period,
+        orders: parseInt(r.orders),
         subtotal: num(r.subtotal),
         delivery: num(r.delivery),
         discount: num(r.discount),
-        revenue:  num(r.revenue)
+        revenue: num(r.revenue)
       }))
     });
   } catch (err) {
-    logger.error("Revenue report error:", err.message);
+    lerr({ route: "GET /api/reports/revenue", status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -191,10 +199,12 @@ async function getRevenueReport(req, res) {
 // Query: ?from=  ?to=  ?category=slug  ?limit=100
 // ==================================================================
 async function getProductReport(req, res) {
-  const from    = req.query.from     || null;
-  const to      = req.query.to       || null;
+  const from = req.query.from || null;
+  const to = req.query.to || null;
   const catSlug = req.query.category || null;
-  const limit   = Math.min(parseInt(req.query.limit) || 100, 500);
+  const limit = Math.min(parseInt(req.query.limit) || 100, 500);
+
+  log({ route: "GET /api/reports/products", from, to, category: catSlug, limit, status: "fetching product report" });
 
   const { clause: dateClause, params: dateParams, nextIdx } =
     dateRangeClause(from, to, "o.created_at", 3);
@@ -224,22 +234,23 @@ async function getProductReport(req, res) {
       [catSlug, null, ...dateParams, limit]
     );
 
+    log({ route: "GET /api/reports/products", status: 200, count: result.rows.length });
     return res.json({
       success: true,
       report: result.rows.map(r => ({
-        productId:  r.id,
-        name:       r.name_ta ? `${r.name_en} (${r.name_ta})` : r.name_en,
-        nameEn:     r.name_en,
-        nameTa:     r.name_ta,
-        category:   r.category,
+        productId: r.id,
+        name: r.name_ta ? `${r.name_en} (${r.name_ta})` : r.name_en,
+        nameEn: r.name_en,
+        nameTa: r.name_ta,
+        category: r.category,
         orderCount: parseInt(r.order_count),
-        unitsSold:  parseInt(r.units_sold),
-        revenue:    num(r.revenue),
-        avgPrice:   num(r.avg_price)
+        unitsSold: parseInt(r.units_sold),
+        revenue: num(r.revenue),
+        avgPrice: num(r.avg_price)
       }))
     });
   } catch (err) {
-    logger.error("Product report error:", err.message);
+    lerr({ route: "GET /api/reports/products", status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -250,9 +261,11 @@ async function getProductReport(req, res) {
 // Query: ?from=  ?to=  ?limit=100
 // ==================================================================
 async function getCustomerReport(req, res) {
-  const from  = req.query.from || null;
-  const to    = req.query.to   || null;
+  const from = req.query.from || null;
+  const to = req.query.to || null;
   const limit = Math.min(parseInt(req.query.limit) || 100, 500);
+
+  log({ route: "GET /api/reports/customers", from, to, limit, status: "fetching customer report" });
 
   const { clause: dateClause, params: dateParams, nextIdx } =
     dateRangeClause(from, to, "o.created_at", 1);
@@ -280,22 +293,23 @@ async function getCustomerReport(req, res) {
       [...dateParams, limit]
     );
 
+    log({ route: "GET /api/reports/customers", status: 200, count: result.rows.length });
     return res.json({
       success: true,
       report: result.rows.map(r => ({
-        customerId:    r.id,
-        name:          r.full_name,
-        email:         r.email,
-        phone:         r.phone,
-        registeredAt:  r.registered_at,
-        totalOrders:   parseInt(r.total_orders),
-        totalSpent:    num(r.total_spent),
+        customerId: r.id,
+        name: r.full_name,
+        email: r.email,
+        phone: r.phone,
+        registeredAt: r.registered_at,
+        totalOrders: parseInt(r.total_orders),
+        totalSpent: num(r.total_spent),
         avgOrderValue: num(r.avg_order_value),
-        lastOrderAt:   r.last_order_at
+        lastOrderAt: r.last_order_at
       }))
     });
   } catch (err) {
-    logger.error("Customer report error:", err.message);
+    lerr({ route: "GET /api/reports/customers", status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -306,13 +320,15 @@ async function getCustomerReport(req, res) {
 // Query: ?category=slug  ?status=in_stock|low_stock|out_of_stock
 // ==================================================================
 async function getInventoryReport(req, res) {
-  const catSlug    = req.query.category || null;
-  const stockStatus = req.query.status  || null;
+  const catSlug = req.query.category || null;
+  const stockStatus = req.query.status || null;
+
+  log({ route: "GET /api/reports/inventory", category: catSlug, stockStatus, status: "fetching inventory report" });
 
   const statusFilter = {
-    "in_stock":    "pv.stock_qty > 10",
-    "low_stock":   "pv.stock_qty > 0 AND pv.stock_qty <= 10",
-    "out_of_stock":"pv.stock_qty = 0"
+    "in_stock": "pv.stock_qty > 10",
+    "low_stock": "pv.stock_qty > 0 AND pv.stock_qty <= 10",
+    "out_of_stock": "pv.stock_qty = 0"
   }[stockStatus] || "TRUE";
 
   try {
@@ -357,31 +373,32 @@ async function getInventoryReport(req, res) {
     );
 
     const s = summary.rows[0];
+    log({ route: "GET /api/reports/inventory", status: 200, variantCount: result.rows.length });
     return res.json({
       success: true,
       summary: {
-        totalVariants:   parseInt(s.total_variants),
-        totalUnits:      parseInt(s.total_units),
+        totalVariants: parseInt(s.total_variants),
+        totalUnits: parseInt(s.total_units),
         totalStockValue: num(s.total_stock_value),
-        outOfStock:      parseInt(s.out_of_stock),
-        lowStock:        parseInt(s.low_stock),
-        inStock:         parseInt(s.in_stock)
+        outOfStock: parseInt(s.out_of_stock),
+        lowStock: parseInt(s.low_stock),
+        inStock: parseInt(s.in_stock)
       },
       report: result.rows.map(r => ({
-        variantId:      r.variant_id,
-        productId:      r.product_id,
-        name:           r.name_ta ? `${r.name_en} (${r.name_ta})` : r.name_en,
-        category:       r.category,
-        weightLabel:    r.weight_label,
-        price:          num(r.price),
-        stockQty:       parseInt(r.stock_qty),
-        stockValue:     num(r.stock_value),
-        stockStatus:    r.stock_status,
+        variantId: r.variant_id,
+        productId: r.product_id,
+        name: r.name_ta ? `${r.name_en} (${r.name_ta})` : r.name_en,
+        category: r.category,
+        weightLabel: r.weight_label,
+        price: num(r.price),
+        stockQty: parseInt(r.stock_qty),
+        stockValue: num(r.stock_value),
+        stockStatus: r.stock_status,
         stockUpdatedAt: r.stock_updated_at
       }))
     });
   } catch (err) {
-    logger.error("Inventory report error:", err.message);
+    lerr({ route: "GET /api/reports/inventory", status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }

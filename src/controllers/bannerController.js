@@ -1,21 +1,20 @@
-const db     = require("../config/db.js");
-const logger = require("../utils/logger.js");
+const db = require("../config/db.js");
 
 function formatBanner(b) {
   return {
-    id:        b.id,
-    title:     b.title,
-    subtitle:  b.subtitle,
-    imageUrl:  b.image_url,
-    videoUrl:  b.video_url,
-    isActive:  b.is_active,
+    id: b.id,
+    title: b.title,
+    subtitle: b.subtitle,
+    imageUrl: b.image_url,
+    videoUrl: b.video_url,
+    isActive: b.is_active,
     createdAt: b.created_at,
     updatedAt: b.updated_at
   };
 }
 
-const log  = (data) => logger.info(JSON.stringify(data));
-const lerr = (data) => logger.error(JSON.stringify(data));
+const log = (data) => console.log(data);
+const lerr = (data) => console.error(data);
 
 // ==================================================================
 // PUBLIC — GET /api/banners
@@ -108,7 +107,7 @@ async function updateBanner(req, res) {
        WHERE id = $6
        RETURNING *`,
       [
-        title    || null,
+        title || null,
         subtitle !== undefined ? subtitle : null,
         imageUrl || null,
         videoUrl !== undefined ? videoUrl : null,

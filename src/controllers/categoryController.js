@@ -1,21 +1,23 @@
-const db     = require("../config/db.js");
-const logger = require("../utils/logger.js");
+const db = require("../config/db.js");
+
+const log = (data) => console.log(data);
+const lerr = (data) => console.error(data);
 
 // Shape for every category response — every column included
 function formatCategory(c) {
   return {
-    id:          c.id,
-    nameEn:      c.name_en,
-    nameTa:      c.name_ta,
+    id: c.id,
+    nameEn: c.name_en,
+    nameTa: c.name_ta,
     // Product card label rule: "English Name (Tamil Name)"
-    label:       c.name_ta ? `${c.name_en} (${c.name_ta})` : c.name_en,
-    slug:        c.slug,
+    label: c.name_ta ? `${c.name_en} (${c.name_ta})` : c.name_en,
+    slug: c.slug,
     description: c.description,
-    imageUrl:    c.image_url,
-    sortOrder:   c.sort_order,
-    isActive:    c.is_active,
-    createdAt:   c.created_at,
-    updatedAt:   c.updated_at
+    imageUrl: c.image_url,
+    sortOrder: c.sort_order,
+    isActive: c.is_active,
+    createdAt: c.created_at,
+    updatedAt: c.updated_at
   };
 }
 
@@ -25,13 +27,15 @@ function formatCategory(c) {
 // Used by: Products page sidebar, Home page, Checkout filters.
 // ==================================================================
 async function getAllCategories(req, res) {
+  log({ route: "GET /api/categories", status: "fetching active categories" });
   try {
     const result = await db.query(
       `SELECT * FROM categories WHERE is_active = TRUE ORDER BY sort_order ASC, name_en ASC`
     );
+    log({ route: "GET /api/categories", status: 200, count: result.rows.length });
     return res.json({ success: true, categories: result.rows.map(formatCategory) });
   } catch (err) {
-    logger.error("Get categories error:", err.message);
+    lerr({ route: "GET /api/categories", status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -42,12 +46,15 @@ async function getAllCategories(req, res) {
 // Used by: Category landing page.
 // ==================================================================
 async function getCategoryBySlug(req, res) {
+  const { slug } = req.params;
+  log({ route: "GET /api/categories/:slug", slug, status: "fetching category by slug" });
   try {
     const catRes = await db.query(
       `SELECT * FROM categories WHERE slug = $1 AND is_active = TRUE`,
-      [req.params.slug]
+      [slug]
     );
     if (catRes.rows.length === 0) {
+      log({ route: "GET /api/categories/:slug", slug, status: 404, message: "Category not found" });
       return res.status(404).json({ success: false, message: "Category not found" });
     }
 
@@ -66,26 +73,27 @@ async function getCategoryBySlug(req, res) {
       [catRes.rows[0].id]
     );
 
+    log({ route: "GET /api/categories/:slug", slug, status: 200, productCount: productRes.rows.length });
     return res.json({
       success: true,
       category: formatCategory(catRes.rows[0]),
       products: productRes.rows.map(p => ({
-        id:              p.id,
-        name:            p.name_ta ? `${p.name_en} (${p.name_ta})` : p.name_en,
-        nameEn:          p.name_en,
-        nameTa:          p.name_ta,
-        slug:            p.slug,
-        primaryImage:    p.primary_image,
-        minPrice:        parseFloat(p.min_price),
+        id: p.id,
+        name: p.name_ta ? `${p.name_en} (${p.name_ta})` : p.name_en,
+        nameEn: p.name_en,
+        nameTa: p.name_ta,
+        slug: p.slug,
+        primaryImage: p.primary_image,
+        minPrice: parseFloat(p.min_price),
         minComparePrice: parseFloat(p.min_compare_price),
-        totalStock:      parseInt(p.total_stock),
-        inStock:         parseInt(p.total_stock) > 0,
-        isBestseller:    p.is_bestseller,
-        isNew:           p.is_new
+        totalStock: parseInt(p.total_stock),
+        inStock: parseInt(p.total_stock) > 0,
+        isBestseller: p.is_bestseller,
+        isNew: p.is_new
       }))
     });
   } catch (err) {
-    logger.error("Get category by slug error:", err.message);
+    lerr({ route: "GET /api/categories/:slug", slug, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -97,8 +105,10 @@ async function getCategoryBySlug(req, res) {
 // ==================================================================
 async function createCategory(req, res) {
   const { nameEn, nameTa, slug, description, imageUrl, sortOrder, isActive } = req.body;
+  log({ route: "POST /api/categories", body: { nameEn, nameTa, slug, description, imageUrl, sortOrder, isActive }, status: "creating category" });
 
   if (!nameEn || !slug) {
+    log({ route: "POST /api/categories", status: 400, message: "nameEn and slug are required" });
     return res.status(400).json({ success: false, message: "nameEn and slug are required" });
   }
 
@@ -106,6 +116,7 @@ async function createCategory(req, res) {
     // Slug uniqueness check — parameterized
     const dup = await db.query("SELECT id FROM categories WHERE slug = $1", [slug.trim()]);
     if (dup.rows.length > 0) {
+      log({ route: "POST /api/categories", status: 409, message: "slug already exists" });
       return res.status(409).json({ success: false, message: "A category with this slug already exists" });
     }
 
@@ -115,17 +126,18 @@ async function createCategory(req, res) {
        RETURNING *`,
       [
         nameEn.trim(),
-        nameTa   || null,
+        nameTa || null,
         slug.trim().toLowerCase(),
         description || null,
-        imageUrl    || null,
-        sortOrder   ?? 0,
-        isActive    ?? true
+        imageUrl || null,
+        sortOrder ?? 0,
+        isActive ?? true
       ]
     );
+    log({ route: "POST /api/categories", status: 201, categoryId: result.rows[0].id });
     return res.status(201).json({ success: true, message: "Category created", category: formatCategory(result.rows[0]) });
   } catch (err) {
-    logger.error("Create category error:", err.message);
+    lerr({ route: "POST /api/categories", status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -135,11 +147,14 @@ async function createCategory(req, res) {
 // Update a category — any field.
 // ==================================================================
 async function updateCategory(req, res) {
+  const { id } = req.params;
   const { nameEn, nameTa, slug, description, imageUrl, sortOrder, isActive } = req.body;
+  log({ route: "PUT /api/categories/:id", categoryId: id, body: { nameEn, nameTa, slug, description, imageUrl, sortOrder, isActive }, status: "updating category" });
 
   try {
-    const existing = await db.query("SELECT id FROM categories WHERE id = $1", [req.params.id]);
+    const existing = await db.query("SELECT id FROM categories WHERE id = $1", [id]);
     if (existing.rows.length === 0) {
+      log({ route: "PUT /api/categories/:id", categoryId: id, status: 404, message: "Category not found" });
       return res.status(404).json({ success: false, message: "Category not found" });
     }
 
@@ -147,9 +162,10 @@ async function updateCategory(req, res) {
     if (slug) {
       const dup = await db.query(
         "SELECT id FROM categories WHERE slug = $1 AND id != $2",
-        [slug.trim(), req.params.id]
+        [slug.trim(), id]
       );
       if (dup.rows.length > 0) {
+        log({ route: "PUT /api/categories/:id", categoryId: id, status: 409, message: "slug already used" });
         return res.status(409).json({ success: false, message: "Slug already used by another category" });
       }
     }
@@ -167,19 +183,20 @@ async function updateCategory(req, res) {
        WHERE id = $8
        RETURNING *`,
       [
-        nameEn   || null,
-        nameTa   || null,
-        slug     ? slug.trim().toLowerCase() : null,
+        nameEn || null,
+        nameTa || null,
+        slug ? slug.trim().toLowerCase() : null,
         description !== undefined ? description : null,
-        imageUrl    !== undefined ? imageUrl    : null,
-        sortOrder   !== undefined ? sortOrder   : null,
-        isActive    !== undefined ? isActive    : null,
-        req.params.id
+        imageUrl !== undefined ? imageUrl : null,
+        sortOrder !== undefined ? sortOrder : null,
+        isActive !== undefined ? isActive : null,
+        id
       ]
     );
+    log({ route: "PUT /api/categories/:id", categoryId: id, status: 200 });
     return res.json({ success: true, message: "Category updated", category: formatCategory(result.rows[0]) });
   } catch (err) {
-    logger.error("Update category error:", err.message);
+    lerr({ route: "PUT /api/categories/:id", categoryId: id, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -189,24 +206,29 @@ async function updateCategory(req, res) {
 // Blocked if any active products use this category.
 // ==================================================================
 async function deleteCategory(req, res) {
+  const { id } = req.params;
+  log({ route: "DELETE /api/categories/:id", categoryId: id, status: "deleting category" });
   try {
     const inUse = await db.query(
       "SELECT COUNT(*) AS c FROM products WHERE category_id = $1 AND is_active = TRUE",
-      [req.params.id]
+      [id]
     );
     if (parseInt(inUse.rows[0].c) > 0) {
+      log({ route: "DELETE /api/categories/:id", categoryId: id, status: 409, message: "cannot delete - products in use" });
       return res.status(409).json({
         success: false,
         message: "Cannot delete — active products belong to this category. Deactivate them first."
       });
     }
-    const result = await db.query("DELETE FROM categories WHERE id = $1 RETURNING id", [req.params.id]);
+    const result = await db.query("DELETE FROM categories WHERE id = $1 RETURNING id", [id]);
     if (result.rows.length === 0) {
+      log({ route: "DELETE /api/categories/:id", categoryId: id, status: 404, message: "Category not found" });
       return res.status(404).json({ success: false, message: "Category not found" });
     }
+    log({ route: "DELETE /api/categories/:id", categoryId: id, status: 200 });
     return res.json({ success: true, message: "Category deleted" });
   } catch (err) {
-    logger.error("Delete category error:", err.message);
+    lerr({ route: "DELETE /api/categories/:id", categoryId: id, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }

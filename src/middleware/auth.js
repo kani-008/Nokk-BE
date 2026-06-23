@@ -1,5 +1,4 @@
 const jwt    = require("jsonwebtoken");
-const logger = require("../utils/logger.js");
 
 const ACCESS_TOKEN_SECRET = process.env.ACCESS_TOKEN_SECRET;
 if (!ACCESS_TOKEN_SECRET) {
@@ -12,16 +11,16 @@ function verifyToken(req, res, next) {
   const token = authHeader && authHeader.split(" ")[1];
 
   if (!token) {
-    logger.warn(`[auth] 401 – no token  ${req.method} ${req.originalUrl}`);
+    console.warn(`[auth] 401 – no token  ${req.method} ${req.originalUrl}`);
     return res.status(401).json({ success: false, message: "Access denied: no token provided" });
   }
 
   try {
     req.user = jwt.verify(token, ACCESS_TOKEN_SECRET);
-    logger.auth("Token verified | user:", req.user.id, "role:", req.user.role);
+    console.log("Token verified | user:", req.user.id, "role:", req.user.role);
     next();
   } catch (err) {
-    logger.warn(`[auth] 403 – token rejected  ${req.method} ${req.originalUrl} | ${err.message}`);
+    console.warn(`[auth] 403 – token rejected  ${req.method} ${req.originalUrl} | ${err.message}`);
     return res.status(403).json({ success: false, message: "Invalid or expired token" });
   }
 }
@@ -29,7 +28,7 @@ function verifyToken(req, res, next) {
 // Admin guard — must run AFTER verifyToken.
 function isAdmin(req, res, next) {
   if (!req.user || req.user.role !== "admin") {
-    logger.warn(`[auth] 403 – not admin  ${req.method} ${req.originalUrl} | role="${req.user?.role}"`);
+    console.warn(`[auth] 403 – not admin  ${req.method} ${req.originalUrl} | role="${req.user?.role}"`);
     return res.status(403).json({ success: false, message: "Access denied: admin privileges required" });
   }
   next();

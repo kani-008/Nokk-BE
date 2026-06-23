@@ -13,8 +13,8 @@ router.get("/",        getActiveOffers);
 // Admin
 router.get("/all",     authenticate, isAdmin, getAllOffers);
 router.get("/:id",     authenticate, isAdmin, getOfferById);
-router.post("/",       authenticate, isAdmin, createOffer);
-router.put("/:id",     authenticate, isAdmin, updateOffer);
-router.delete("/:id",  authenticate, isAdmin, deleteOffer);
+router.post("/create-offer",       authenticate, isAdmin, createOffer);
+router.put("/update-offer",     authenticate, isAdmin, updateOffer);
+router.delete("/delete-offer",  authenticate, isAdmin, deleteOffer);
 
 module.exports = router;

@@ -1,5 +1,7 @@
-const db     = require("../config/db.js");
-const logger = require("../utils/logger.js");
+const db = require("../config/db.js");
+
+const log = (data) => console.log(data);
+const lerr = (data) => console.error(data);
 
 // Live offers table columns (from current_schema.sql dump):
 // id, name, description, discount_value, product_id, category_id,
@@ -12,25 +14,25 @@ const num = (v) => parseFloat(v) || 0;
 
 function formatOffer(o) {
   const now = new Date();
-  const started  = !o.start_date || new Date(o.start_date) <= now;
-  const notEnded = !o.end_date   || new Date(o.end_date)   >= now;
+  const started = !o.start_date || new Date(o.start_date) <= now;
+  const notEnded = !o.end_date || new Date(o.end_date) >= now;
   return {
-    id:             o.id,
-    name:           o.name,
-    description:    o.description,
-    discountValue:  num(o.discount_value),
-    productId:      o.product_id,
-    productName:    o.product_name    || null,
-    categoryId:     o.category_id,
-    categoryName:   o.category_name   || null,
-    minOrderValue:  num(o.min_order_value),
-    maxDiscount:    o.max_discount ? num(o.max_discount) : null,
-    startDate:      o.start_date,
-    endDate:        o.end_date,
-    isActive:       o.is_active,
-    isLive:         o.is_active && started && notEnded,
-    createdAt:      o.created_at,
-    updatedAt:      o.updated_at
+    id: o.id,
+    name: o.name,
+    description: o.description,
+    discountValue: num(o.discount_value),
+    productId: o.product_id,
+    productName: o.product_name || null,
+    categoryId: o.category_id,
+    categoryName: o.category_name || null,
+    minOrderValue: num(o.min_order_value),
+    maxDiscount: o.max_discount ? num(o.max_discount) : null,
+    startDate: o.start_date,
+    endDate: o.end_date,
+    isActive: o.is_active,
+    isLive: o.is_active && started && notEnded,
+    createdAt: o.created_at,
+    updatedAt: o.updated_at
   };
 }
 
@@ -40,6 +42,7 @@ function formatOffer(o) {
 // Used by: Public Offers page, product detail discount badge.
 // ==================================================================
 async function getActiveOffers(req, res) {
+  log({ route: "GET /api/offers", status: "fetching active offers" });
   try {
     const result = await db.query(
       `SELECT
@@ -54,9 +57,10 @@ async function getActiveOffers(req, res) {
          AND (o.end_date   IS NULL OR o.end_date   >= NOW())
        ORDER BY o.created_at DESC`
     );
+    log({ route: "GET /api/offers", status: 200, count: result.rows.length });
     return res.json({ success: true, offers: result.rows.map(formatOffer) });
   } catch (err) {
-    logger.error("Get active offers error:", err.message);
+    lerr({ route: "GET /api/offers", status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -66,6 +70,7 @@ async function getActiveOffers(req, res) {
 // All offers including inactive and expired — for admin manage screen.
 // ==================================================================
 async function getAllOffers(req, res) {
+  log({ route: "GET /api/offers/all", status: "fetching all offers" });
   try {
     const result = await db.query(
       `SELECT
@@ -77,9 +82,10 @@ async function getAllOffers(req, res) {
        LEFT JOIN categories c ON c.id = o.category_id
        ORDER BY o.created_at DESC`
     );
+    log({ route: "GET /api/offers/all", status: 200, count: result.rows.length });
     return res.json({ success: true, offers: result.rows.map(formatOffer) });
   } catch (err) {
-    logger.error("Get all offers error:", err.message);
+    lerr({ route: "GET /api/offers/all", status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -89,6 +95,8 @@ async function getAllOffers(req, res) {
 // Single offer detail.
 // ==================================================================
 async function getOfferById(req, res) {
+  const { id } = req.params;
+  log({ route: "GET /api/offers/:id", offerId: id, status: "fetching offer by id" });
   try {
     const result = await db.query(
       `SELECT o.*, p.name_en AS product_name, c.name_en AS category_name
@@ -96,14 +104,16 @@ async function getOfferById(req, res) {
        LEFT JOIN products   p ON p.id = o.product_id
        LEFT JOIN categories c ON c.id = o.category_id
        WHERE o.id = $1`,
-      [req.params.id]
+      [id]
     );
     if (result.rows.length === 0) {
+      log({ route: "GET /api/offers/:id", offerId: id, status: 404, message: "Offer not found" });
       return res.status(404).json({ success: false, message: "Offer not found" });
     }
+    log({ route: "GET /api/offers/:id", offerId: id, status: 200 });
     return res.json({ success: true, offer: formatOffer(result.rows[0]) });
   } catch (err) {
-    logger.error("Get offer by id error:", err.message);
+    lerr({ route: "GET /api/offers/:id", offerId: id, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -121,11 +131,14 @@ async function createOffer(req, res) {
     minOrderValue, maxDiscount,
     startDate, endDate, isActive
   } = req.body;
+  log({ route: "POST /api/offers", body: { name, discountValue, productId, categoryId, minOrderValue, maxDiscount, startDate, endDate, isActive }, status: "creating offer" });
 
   if (!name || discountValue == null) {
+    log({ route: "POST /api/offers", status: 400, message: "name and discountValue are required" });
     return res.status(400).json({ success: false, message: "name and discountValue are required" });
   }
   if (discountValue <= 0 || discountValue > 100) {
+    log({ route: "POST /api/offers", status: 400, message: "discountValue must be between 1 and 100" });
     return res.status(400).json({ success: false, message: "discountValue must be between 1 and 100 (percent)" });
   }
 
@@ -138,20 +151,21 @@ async function createOffer(req, res) {
        RETURNING *`,
       [
         name.trim(),
-        description    || null,
+        description || null,
         discountValue,
-        productId      || null,
-        categoryId     || null,
-        minOrderValue  || 0,
-        maxDiscount    || null,
-        startDate      || null,
-        endDate        || null,
-        isActive       ?? true
+        productId || null,
+        categoryId || null,
+        minOrderValue || 0,
+        maxDiscount || null,
+        startDate || null,
+        endDate || null,
+        isActive ?? true
       ]
     );
+    log({ route: "POST /api/offers", status: 201, offerId: result.rows[0].id });
     return res.status(201).json({ success: true, message: "Offer created", offer: formatOffer(result.rows[0]) });
   } catch (err) {
-    logger.error("Create offer error:", err.message);
+    lerr({ route: "POST /api/offers", status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -161,16 +175,19 @@ async function createOffer(req, res) {
 // Update an existing offer. Only send fields you want to change.
 // ==================================================================
 async function updateOffer(req, res) {
+  const { id } = req.params;
   const {
     name, description, discountValue,
     productId, categoryId,
     minOrderValue, maxDiscount,
     startDate, endDate, isActive
   } = req.body;
+  log({ route: "PUT /api/offers/:id", offerId: id, body: { name, description, discountValue, productId, categoryId, minOrderValue, maxDiscount, startDate, endDate, isActive }, status: "updating offer" });
 
   try {
-    const existing = await db.query("SELECT id FROM offers WHERE id = $1", [req.params.id]);
+    const existing = await db.query("SELECT id FROM offers WHERE id = $1", [id]);
     if (existing.rows.length === 0) {
+      log({ route: "PUT /api/offers/:id", offerId: id, status: 404, message: "Offer not found" });
       return res.status(404).json({ success: false, message: "Offer not found" });
     }
 
@@ -190,22 +207,23 @@ async function updateOffer(req, res) {
        WHERE id = $11
        RETURNING *`,
       [
-        name          || null,
-        description   !== undefined ? description   : null,
+        name || null,
+        description !== undefined ? description : null,
         discountValue !== undefined ? discountValue : null,
-        productId     !== undefined ? productId     : null,
-        categoryId    !== undefined ? categoryId    : null,
+        productId !== undefined ? productId : null,
+        categoryId !== undefined ? categoryId : null,
         minOrderValue !== undefined ? minOrderValue : null,
-        maxDiscount   !== undefined ? maxDiscount   : null,
-        startDate     !== undefined ? startDate     : null,
-        endDate       !== undefined ? endDate       : null,
-        isActive      !== undefined ? isActive      : null,
-        req.params.id
+        maxDiscount !== undefined ? maxDiscount : null,
+        startDate !== undefined ? startDate : null,
+        endDate !== undefined ? endDate : null,
+        isActive !== undefined ? isActive : null,
+        id
       ]
     );
+    log({ route: "PUT /api/offers/:id", offerId: id, status: 200 });
     return res.json({ success: true, message: "Offer updated", offer: formatOffer(result.rows[0]) });
   } catch (err) {
-    logger.error("Update offer error:", err.message);
+    lerr({ route: "PUT /api/offers/:id", offerId: id, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -214,16 +232,20 @@ async function updateOffer(req, res) {
 // ADMIN — DELETE /api/offers/:id
 // ==================================================================
 async function deleteOffer(req, res) {
+  const { id } = req.params;
+  log({ route: "DELETE /api/offers/:id", offerId: id, status: "deleting offer" });
   try {
     const result = await db.query(
-      "DELETE FROM offers WHERE id = $1 RETURNING id", [req.params.id]
+      "DELETE FROM offers WHERE id = $1 RETURNING id", [id]
     );
     if (result.rows.length === 0) {
+      log({ route: "DELETE /api/offers/:id", offerId: id, status: 404, message: "Offer not found" });
       return res.status(404).json({ success: false, message: "Offer not found" });
     }
+    log({ route: "DELETE /api/offers/:id", offerId: id, status: 200 });
     return res.json({ success: true, message: "Offer deleted" });
   } catch (err) {
-    logger.error("Delete offer error:", err.message);
+    lerr({ route: "DELETE /api/offers/:id", offerId: id, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }

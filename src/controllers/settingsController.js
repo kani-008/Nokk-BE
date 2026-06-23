@@ -1,10 +1,12 @@
-const db     = require("../config/db.js");
-const logger = require("../utils/logger.js");
+const db = require("../config/db.js");
+
+const log = (data) => console.log(data);
+const lerr = (data) => console.error(data);
 
 // settings schema: key TEXT PK, value TEXT NOT NULL, updated_at
 // Auto-cast value: "true"/"false" → boolean, numeric strings → number.
 function castValue(val) {
-  if (val === "true")  return true;
+  if (val === "true") return true;
   if (val === "false") return false;
   if (val !== "" && !isNaN(val)) return Number(val);
   return val;
@@ -16,13 +18,15 @@ function castValue(val) {
 // Used by: Home page (delivery thresholds, contact info, social links).
 // ==================================================================
 async function getSettings(req, res) {
+  log({ route: "GET /api/settings", status: "fetching all settings" });
   try {
     const result = await db.query(`SELECT key, value FROM settings ORDER BY key ASC`);
     const settings = {};
     result.rows.forEach(r => { settings[r.key] = castValue(r.value); });
+    log({ route: "GET /api/settings", status: 200, count: result.rows.length });
     return res.json({ success: true, settings });
   } catch (err) {
-    logger.error("Get settings error:", err.message);
+    lerr({ route: "GET /api/settings", status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -33,8 +37,13 @@ async function getSettings(req, res) {
 // Body: { websiteName: "...", flatDeliveryCharge: "50", ... }
 // ==================================================================
 async function updateSettings(req, res) {
+  const adminId = req.user?.id;
+  const keys = Object.keys(req.body);
+  log({ route: "PUT /api/settings", adminId, keys, status: "updating settings" });
+
   const entries = Object.entries(req.body);
   if (entries.length === 0) {
+    log({ route: "PUT /api/settings", adminId, status: 400, message: "No settings provided" });
     return res.status(400).json({ success: false, message: "No settings provided" });
   }
 
@@ -60,10 +69,11 @@ async function updateSettings(req, res) {
     const result = await db.query(`SELECT key, value FROM settings ORDER BY key ASC`);
     const settings = {};
     result.rows.forEach(r => { settings[r.key] = castValue(r.value); });
+    log({ route: "PUT /api/settings", adminId, status: 200 });
     return res.json({ success: true, message: "Settings updated", settings });
   } catch (err) {
     await client.query("ROLLBACK");
-    logger.error("Update settings error:", err.message);
+    lerr({ route: "PUT /api/settings", adminId, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   } finally {
     client.release();
@@ -75,20 +85,24 @@ async function updateSettings(req, res) {
 // Read a single setting by key.
 // ==================================================================
 async function getSetting(req, res) {
+  const key = req.params.key;
+  log({ route: "GET /api/settings/:key", key, status: "fetching setting" });
   try {
     const result = await db.query(
-      "SELECT key, value FROM settings WHERE key = $1", [req.params.key]
+      "SELECT key, value FROM settings WHERE key = $1", [key]
     );
     if (result.rows.length === 0) {
+      log({ route: "GET /api/settings/:key", key, status: 404, message: "Setting not found" });
       return res.status(404).json({ success: false, message: "Setting not found" });
     }
+    log({ route: "GET /api/settings/:key", key, status: 200 });
     return res.json({
       success: true,
-      key:   result.rows[0].key,
+      key: result.rows[0].key,
       value: castValue(result.rows[0].value)
     });
   } catch (err) {
-    logger.error("Get setting error:", err.message);
+    lerr({ route: "GET /api/settings/:key", key, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }

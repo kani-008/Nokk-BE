@@ -1,31 +1,30 @@
 const express = require("express");
-const cors    = require("cors");
-const morgan  = require("morgan");
-const os      = require("os");
-const logger  = require("./src/utils/logger.js");
+const cors = require("cors");
+const morgan = require("morgan");
+const os = require("os");
 
 require("dotenv").config();
 
 require("./src/config/db.js"); // runs connection check on startup
 
-// ── Routes 
-const loginRoute     = require("./src/routes/loginRoutes.js");
-const userRoute      = require("./src/routes/userRoute.js");
-const orderRoute     = require("./src/routes/orderRoute.js");
-const categoryRoute  = require("./src/routes/categoryRoute.js");
-const productRoute   = require("./src/routes/productRoute.js");
-const cartRoute      = require("./src/routes/cartRoute.js");
-const wishlistRoute  = require("./src/routes/wishlistRoute.js");
-const bannerRoute    = require("./src/routes/bannerRoute.js");
-const btextRoute     = require("./src/routes/btextRoute.js");
-const couponRoute    = require("./src/routes/couponRoute.js");
-const offersRoute    = require("./src/routes/offersRoute.js");
+// ── Routes
+const loginRoute = require("./src/routes/loginRoutes.js");
+const userRoute = require("./src/routes/userRoute.js");
+const orderRoute = require("./src/routes/orderRoute.js");
+const categoryRoute = require("./src/routes/categoryRoute.js");
+const productRoute = require("./src/routes/productRoute.js");
+const cartRoute = require("./src/routes/cartRoute.js");
+const wishlistRoute = require("./src/routes/wishlistRoute.js");
+const bannerRoute = require("./src/routes/bannerRoute.js");
+const btextRoute = require("./src/routes/btextRoute.js");
+const couponRoute = require("./src/routes/couponRoute.js");
+const offersRoute = require("./src/routes/offersRoute.js");
 const inventoryRoute = require("./src/routes/inventoryRoute.js");
-const settingsRoute  = require("./src/routes/settingsRoute.js");
+const settingsRoute = require("./src/routes/settingsRoute.js");
 const dashboardRoute = require("./src/routes/dashboardRoute.js");
-const reportRoute    = require("./src/routes/reportRoute.js");
+const reportRoute = require("./src/routes/reportRoute.js");
 
-const app  = express();
+const app = express();
 const PORT = process.env.PORT || 5000;
 const HOST = "0.0.0.0"; // bind to all interfaces so phones on the same Wi-Fi can reach it
 
@@ -37,25 +36,29 @@ app.use(express.urlencoded({ extended: true }));
 
 // ── Health check ──────────────────────────────────────────────────
 app.get("/", (req, res) => {
-  res.json({ success: true, message: "NammaOorKaruvattuKadai API is live", timestamp: new Date() });
+  res.json({
+    success: true,
+    message: "NammaOorKaruvattuKadai API is live",
+    timestamp: new Date(),
+  });
 });
 
 // ── API routes ────────────────────────────────────────────────────
-app.use("/api/auth",       loginRoute);      // login, OTP, reset-password, refresh, logout
-app.use("/api/users",      userRoute);       // profile + addresses (self) | CRUD (admin)
-app.use("/api/orders",     orderRoute);      // checkout, my-orders (customer) | manage (admin)
-app.use("/api/categories", categoryRoute);   // public list | CRUD (admin)
-app.use("/api/products",   productRoute);    // public list | CRUD + variants + images (admin)
-app.use("/api/cart",       cartRoute);       // add, update, remove, clear (login required)
-app.use("/api/wishlist",   wishlistRoute);   // add, remove, clear (login required)
-app.use("/api/banners",    bannerRoute);     // public active | CRUD (admin)
-app.use("/api/btext",      btextRoute);      // public active by banner | CRUD (admin)
-app.use("/api/coupons",    couponRoute);     // validate (customer) | CRUD (admin)
-app.use("/api/offers",     offersRoute);     // public live | CRUD (admin)
-app.use("/api/inventory",  inventoryRoute);  // stock management (admin only)
-app.use("/api/settings",   settingsRoute);   // public read | write (admin)
-app.use("/api/dashboard",  dashboardRoute);  // KPIs, reports, charts (admin only)
-app.use("/api/reports",    reportRoute);     // exportable reports (admin only)
+app.use("/api/auth", loginRoute); // login, OTP, reset-password, refresh, logout
+app.use("/api/users", userRoute); // profile + addresses (self) | CRUD (admin)
+app.use("/api/orders", orderRoute); // checkout, my-orders (customer) | manage (admin)
+app.use("/api/categories", categoryRoute); // public list | CRUD (admin)
+app.use("/api/products", productRoute); // public list | CRUD + variants + images (admin)
+app.use("/api/cart", cartRoute); // add, update, remove, clear (login required)
+app.use("/api/wishlist", wishlistRoute); // add, remove, clear (login required)
+app.use("/api/banners", bannerRoute); // public active | CRUD (admin)
+app.use("/api/btext", btextRoute); // public active by banner | CRUD (admin)
+app.use("/api/coupons", couponRoute); // validate (customer) | CRUD (admin)
+app.use("/api/offers", offersRoute); // public live | CRUD (admin)
+app.use("/api/inventory", inventoryRoute); // stock management (admin only)
+app.use("/api/settings", settingsRoute); // public read | write (admin)
+app.use("/api/dashboard", dashboardRoute); // KPIs, reports, charts (admin only)
+app.use("/api/reports", reportRoute); // exportable reports (admin only)
 
 // ── 404 ───────────────────────────────────────────────────────────
 app.use((req, res) => {
@@ -65,7 +68,7 @@ app.use((req, res) => {
 // ── Global error handler ──────────────────────────────────────────
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
-  logger.error("Unhandled error:", err.message);
+  console.error("Unhandled error:", err.message);
   res.status(500).json({ success: false, message: "Internal server error" });
 });
 
@@ -83,12 +86,8 @@ function getLanIp() {
 // ── Start ─────────────────────────────────────────────────────────
 app.listen(PORT, HOST, () => {
   const lanIp = getLanIp();
-  logger.banner([
-    "NammaOorKaruvattuKadai  Backend",
-    `Env:     ${process.env.NODE_ENV || "development"}`,
-    `Local:   http://localhost:${PORT}`,
-    `Network: http://${lanIp}:${PORT}   (same Wi-Fi)`,
-  ]);
+  console.log("NammaOorKaruvattuKadai server started");
+  console.log(`Local:   http://localhost:${PORT}`);
+  console.log(`Network: http://${lanIp}:${PORT}   (same Wi-Fi)`);
 });
-
 module.exports = app;

@@ -1,20 +1,19 @@
-const db     = require("../config/db.js");
-const logger = require("../utils/logger.js");
+const db = require("../config/db.js");
 
 function formatBtext(b) {
   return {
-    id:        b.bt_id,
-    bannerId:  b.banner_id,
-    heading:   b.heading,
-    subtext:   b.subtext,
-    isActive:  b.is_active,
+    id: b.bt_id,
+    bannerId: b.banner_id,
+    heading: b.heading,
+    subtext: b.subtext,
+    isActive: b.is_active,
     createdAt: b.created_at,
     updatedAt: b.updated_at
   };
 }
 
-const log  = (data) => logger.info(JSON.stringify(data));
-const lerr = (data) => logger.error(JSON.stringify(data));
+const log = (data) => console.log(data);
+const lerr = (data) => console.error(data);
 
 // ==================================================================
 // PUBLIC — GET /api/btext?bannerId=<id>
@@ -31,10 +30,6 @@ async function getBtextByBanner(req, res) {
       `SELECT * FROM btext WHERE banner_id = $1 AND is_active = TRUE ORDER BY bt_id ASC`,
       [bannerId]
     );
-    if (result.rows.length === 0) {
-      log({ route: "GET /api/btext", bannerId, status: 404, message: "No active btext found" });
-      return res.status(404).json({ success: false, message: "No active btext found for this banner" });
-    }
     log({ route: "GET /api/btext", bannerId, status: 200, count: result.rows.length });
     return res.status(200).json({ success: true, btexts: result.rows.map(formatBtext) });
   } catch (err) {
@@ -50,10 +45,6 @@ async function getAllBtext(req, res) {
   log({ route: "GET /api/btext/all", status: "fetching all btext" });
   try {
     const result = await db.query(`SELECT * FROM btext ORDER BY banner_id ASC, bt_id ASC`);
-    if (result.rows.length === 0) {
-      log({ route: "GET /api/btext/all", status: 404, message: "No btext entries found" });
-      return res.status(404).json({ success: false, message: "No btext entries found" });
-    }
     log({ route: "GET /api/btext/all", status: 200, count: result.rows.length });
     return res.status(200).json({ success: true, btexts: result.rows.map(formatBtext) });
   } catch (err) {
@@ -77,10 +68,6 @@ async function getBtextForBanner(req, res) {
       `SELECT * FROM btext WHERE banner_id = $1 ORDER BY bt_id ASC`,
       [bannerId]
     );
-    if (result.rows.length === 0) {
-      log({ route: "GET /api/btext/banner/:bannerId", bannerId, status: 404, message: "No btext found for this banner" });
-      return res.status(404).json({ success: false, message: "No btext found for this banner" });
-    }
     log({ route: "GET /api/btext/banner/:bannerId", bannerId, status: 200, count: result.rows.length });
     return res.status(200).json({ success: true, btexts: result.rows.map(formatBtext) });
   } catch (err) {
@@ -133,9 +120,11 @@ async function updateBtext(req, res) {
   const { heading, subtext, isActive } = req.body;
   log({ route: "PUT /api/btext/:id", btextId: id, body: { heading, subtext, isActive } });
   if (!id) {
-    log({ route: "PUT /api/btext/:id",
-       status: 400,
-       message: "Btext id is required" });
+    log({
+      route: "PUT /api/btext/:id",
+      status: 400,
+      message: "Btext id is required"
+    });
     return res.status(400).json({ success: false, message: "Btext id is required" });
   }
   try {
@@ -148,8 +137,8 @@ async function updateBtext(req, res) {
        WHERE bt_id = $4
        RETURNING *`,
       [
-        heading  || null,
-        subtext  !== undefined ? subtext  : null,
+        heading || null,
+        subtext !== undefined ? subtext : null,
         isActive !== undefined ? isActive : null,
         id
       ]

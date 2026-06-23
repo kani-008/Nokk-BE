@@ -1,5 +1,7 @@
-const db     = require("../config/db.js");
-const logger = require("../utils/logger.js");
+const db = require("../config/db.js");
+
+const log = (data) => console.log(data);
+const lerr = (data) => console.error(data);
 
 // ------------------------------------------------------------------
 // Helpers
@@ -8,29 +10,29 @@ const num = (v) => parseFloat(v) || 0;
 
 function formatOrder(ord, items = [], timeline = []) {
   return {
-    id:             ord.id,
-    createdAt:      ord.created_at,
-    updatedAt:      ord.updated_at,
-    customerName:   ord.customer_name,
-    customerEmail:  ord.customer_email,
-    customerPhone:  ord.customer_phone,
-    subtotal:       num(ord.subtotal),
+    id: ord.id,
+    createdAt: ord.created_at,
+    updatedAt: ord.updated_at,
+    customerName: ord.customer_name,
+    customerEmail: ord.customer_email,
+    customerPhone: ord.customer_phone,
+    subtotal: num(ord.subtotal),
     deliveryCharge: num(ord.delivery_charge),
-    discount:       num(ord.discount),
-    couponApplied:  ord.coupon_applied,
-    total:          num(ord.total),
-    status:         ord.status,
-    paymentStatus:  ord.payment_status,
-    paymentMethod:  ord.payment_method,
-    courierName:    ord.courier_name    || null,
+    discount: num(ord.discount),
+    couponApplied: ord.coupon_applied,
+    total: num(ord.total),
+    status: ord.status,
+    paymentStatus: ord.payment_status,
+    paymentMethod: ord.payment_method,
+    courierName: ord.courier_name || null,
     trackingNumber: ord.tracking_number || null,
-    trackingUrl:    ord.tracking_url    || null,
+    trackingUrl: ord.tracking_url || null,
     address: {
       addressLine1: ord.shipping_address_line1,
       addressLine2: ord.shipping_address_line2,
-      city:         ord.shipping_city,
-      state:        ord.shipping_state,
-      pincode:      ord.shipping_pincode
+      city: ord.shipping_city,
+      state: ord.shipping_state,
+      pincode: ord.shipping_pincode
     },
     items,
     timeline
@@ -39,14 +41,14 @@ function formatOrder(ord, items = [], timeline = []) {
 
 function formatItem(i) {
   return {
-    id:        i.id,
+    id: i.id,
     productId: i.product_id,
     variantId: i.variant_id,
-    name:      i.name_ta ? `${i.name_en} (${i.name_ta})` : i.name_en,
-    weight:    i.weight,
-    price:     num(i.price),
-    quantity:  parseInt(i.quantity),
-    total:     num(i.price) * parseInt(i.quantity)
+    name: i.name_ta ? `${i.name_en} (${i.name_ta})` : i.name_en,
+    weight: i.weight,
+    price: num(i.price),
+    quantity: parseInt(i.quantity),
+    total: num(i.price) * parseInt(i.quantity)
   };
 }
 
@@ -67,7 +69,7 @@ async function fetchItemsAndTimeline(orderId) {
     )
   ]);
   return {
-    items:    itemsRes.rows.map(formatItem),
+    items: itemsRes.rows.map(formatItem),
     timeline: timelineRes.rows
   };
 }
@@ -133,11 +135,14 @@ async function checkout(req, res) {
     subtotal, deliveryCharge, discount, total,
     couponApplied
   } = req.body;
+  log({ route: "POST /api/orders/checkout", userId: req.user.id, body: { itemsCount: items?.length, paymentMethod, subtotal, deliveryCharge, discount, total, couponApplied }, status: "checkout process started" });
 
   if (!items || !items.length || !address || !paymentMethod) {
+    log({ route: "POST /api/orders/checkout", userId: req.user.id, status: 400, message: "items, address and paymentMethod are required" });
     return res.status(400).json({ success: false, message: "items, address and paymentMethod are required" });
   }
   if (!address.fullName || !address.phone || !address.addressLine1 || !address.city || !address.pincode) {
+    log({ route: "POST /api/orders/checkout", userId: req.user.id, status: 400, message: "incomplete address" });
     return res.status(400).json({ success: false, message: "Incomplete address — fullName, phone, addressLine1, city, pincode required" });
   }
 
@@ -174,9 +179,9 @@ async function checkout(req, res) {
       );
     }
 
-    const orderId       = await generateOrderId((sql, params) => client.query(sql, params));
+    const orderId = await generateOrderId((sql, params) => client.query(sql, params));
     const paymentStatus = paymentMethod.toLowerCase().includes("cod") ? "pending" : "paid";
-    const addrLine1     = address.addressLine1 || `${address.doorNo || ""} ${address.street || ""}`.trim();
+    const addrLine1 = address.addressLine1 || `${address.doorNo || ""} ${address.street || ""}`.trim();
 
     // Insert order
     await client.query(
@@ -206,7 +211,7 @@ async function checkout(req, res) {
            (order_id, product_id, variant_id, name_en, name_ta, weight, price, quantity)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
         [orderId, item.productId, resolvedVariants[i], item.nameEn, item.nameTa || null,
-         item.weight, item.price, item.quantity]
+          item.weight, item.price, item.quantity]
       );
     }
 
@@ -234,17 +239,19 @@ async function checkout(req, res) {
 
     const { items: fmtItems, timeline } = await fetchItemsAndTimeline(orderId);
     const orderRow = await db.query("SELECT * FROM orders WHERE id = $1", [orderId]);
+    log({ route: "POST /api/orders/checkout", userId: req.user.id, orderId, status: 201 });
     return res.status(201).json({
       success: true,
       message: "Order placed successfully!",
-      order:   formatOrder(orderRow.rows[0], fmtItems, timeline)
+      order: formatOrder(orderRow.rows[0], fmtItems, timeline)
     });
   } catch (err) {
     await client.query("ROLLBACK");
     if (err.status) {
+      log({ route: "POST /api/orders/checkout", userId: req.user.id, status: err.status, message: err.message });
       return res.status(err.status).json({ success: false, message: err.message });
     }
-    logger.error("Checkout error:", err.message);
+    lerr({ route: "POST /api/orders/checkout", userId: req.user.id, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   } finally {
     client.release();
@@ -257,10 +264,11 @@ async function checkout(req, res) {
 // OPTIMIZED: 4 queries total regardless of result size (no N+1)
 // ==================================================================
 async function getMyOrders(req, res) {
-  const page   = Math.max(parseInt(req.query.page)  || 1, 1);
-  const limit  = Math.min(parseInt(req.query.limit) || 10, 50);
+  const page = Math.max(parseInt(req.query.page) || 1, 1);
+  const limit = Math.min(parseInt(req.query.limit) || 10, 50);
   const offset = (page - 1) * limit;
   const status = req.query.status || null;
+  log({ route: "GET /api/orders/my", userId: req.user.id, query: { page, limit, status }, status: "fetching own orders" });
 
   try {
     const result = await db.query(
@@ -281,17 +289,18 @@ async function getMyOrders(req, res) {
       formatOrder(ord, itemsMap[ord.id] || [], timelinesMap[ord.id] || [])
     );
 
+    log({ route: "GET /api/orders/my", userId: req.user.id, status: 200, count: result.rows.length });
     return res.json({
       success: true,
       pagination: {
         page, limit,
-        total:      parseInt(countRes.rows[0].total),
+        total: parseInt(countRes.rows[0].total),
         totalPages: Math.ceil(parseInt(countRes.rows[0].total) / limit)
       },
       orders
     });
   } catch (err) {
-    logger.error("Get my orders error:", err.message);
+    lerr({ route: "GET /api/orders/my", userId: req.user.id, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -300,18 +309,22 @@ async function getMyOrders(req, res) {
 // GET /api/orders/my/:id   (customer — own order detail)
 // ==================================================================
 async function getMyOrderById(req, res) {
+  const { id } = req.params;
+  log({ route: "GET /api/orders/my/:id", userId: req.user.id, orderId: id, status: "fetching own order detail" });
   try {
     const result = await db.query(
       "SELECT * FROM orders WHERE id = $1 AND user_id = $2",
-      [req.params.id, req.user.id]
+      [id, req.user.id]
     );
     if (result.rows.length === 0) {
+      log({ route: "GET /api/orders/my/:id", userId: req.user.id, orderId: id, status: 404, message: "Order not found" });
       return res.status(404).json({ success: false, message: "Order not found" });
     }
-    const { items, timeline } = await fetchItemsAndTimeline(req.params.id);
+    const { items, timeline } = await fetchItemsAndTimeline(id);
+    log({ route: "GET /api/orders/my/:id", userId: req.user.id, orderId: id, status: 200 });
     return res.json({ success: true, order: formatOrder(result.rows[0], items, timeline) });
   } catch (err) {
-    logger.error("Get my order detail error:", err.message);
+    lerr({ route: "GET /api/orders/my/:id", userId: req.user.id, orderId: id, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -321,12 +334,14 @@ async function getMyOrderById(req, res) {
 // Only allowed when status is pending or confirmed.
 // ==================================================================
 async function cancelMyOrder(req, res) {
+  const { id } = req.params;
+  log({ route: "POST /api/orders/my/:id/cancel", userId: req.user.id, orderId: id, status: "cancelling own order" });
   const client = await db.getClient();
   try {
     await client.query("BEGIN");
     const ordRes = await client.query(
       "SELECT * FROM orders WHERE id = $1 AND user_id = $2 FOR UPDATE",
-      [req.params.id, req.user.id]
+      [id, req.user.id]
     );
     if (ordRes.rows.length === 0) {
       const e = new Error("Order not found"); e.status = 404; throw e;
@@ -338,13 +353,13 @@ async function cancelMyOrder(req, res) {
 
     await client.query(
       "UPDATE orders SET status = 'cancelled', updated_at = NOW() WHERE id = $1",
-      [req.params.id]
+      [id]
     );
 
     // Restore stock
     const itemsRes = await client.query(
       "SELECT variant_id, quantity FROM order_items WHERE order_id = $1",
-      [req.params.id]
+      [id]
     );
     for (const item of itemsRes.rows) {
       if (item.variant_id) {
@@ -357,17 +372,19 @@ async function cancelMyOrder(req, res) {
 
     await client.query(
       "INSERT INTO order_timelines (order_id, status, notes) VALUES ($1,'cancelled','Order cancelled by customer.')",
-      [req.params.id]
+      [id]
     );
 
     await client.query("COMMIT");
+    log({ route: "POST /api/orders/my/:id/cancel", userId: req.user.id, orderId: id, status: 200 });
     return res.json({ success: true, message: "Order cancelled successfully" });
   } catch (err) {
     await client.query("ROLLBACK");
     if (err.status) {
+      log({ route: "POST /api/orders/my/:id/cancel", userId: req.user.id, orderId: id, status: err.status, message: err.message });
       return res.status(err.status).json({ success: false, message: err.message });
     }
-    logger.error("Cancel order error:", err.message);
+    lerr({ route: "POST /api/orders/my/:id/cancel", userId: req.user.id, orderId: id, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   } finally {
     client.release();
@@ -380,8 +397,12 @@ async function cancelMyOrder(req, res) {
 // Body: { reason, details? }
 // ==================================================================
 async function requestReturn(req, res) {
+  const { id } = req.params;
   const { reason, details } = req.body;
+  log({ route: "POST /api/orders/my/:id/return", userId: req.user.id, orderId: id, body: { reason, details }, status: "requesting order return" });
+
   if (!reason) {
+    log({ route: "POST /api/orders/my/:id/return", userId: req.user.id, orderId: id, status: 400, message: "reason is required" });
     return res.status(400).json({ success: false, message: "reason is required" });
   }
   const client = await db.getClient();
@@ -389,7 +410,7 @@ async function requestReturn(req, res) {
     await client.query("BEGIN");
     const ordRes = await client.query(
       "SELECT * FROM orders WHERE id = $1 AND user_id = $2 FOR UPDATE",
-      [req.params.id, req.user.id]
+      [id, req.user.id]
     );
     if (ordRes.rows.length === 0) {
       const e = new Error("Order not found"); e.status = 404; throw e;
@@ -400,7 +421,7 @@ async function requestReturn(req, res) {
 
     const existing = await client.query(
       "SELECT id FROM return_requests WHERE order_id = $1 AND user_id = $2",
-      [req.params.id, req.user.id]
+      [id, req.user.id]
     );
     if (existing.rows.length > 0) {
       const e = new Error("Return request already submitted for this order"); e.status = 409; throw e;
@@ -408,25 +429,27 @@ async function requestReturn(req, res) {
 
     await client.query(
       "UPDATE orders SET status = 'return_requested', updated_at = NOW() WHERE id = $1",
-      [req.params.id]
+      [id]
     );
     await client.query(
       "INSERT INTO return_requests (order_id, user_id, reason, details, status) VALUES ($1,$2,$3,$4,'requested')",
-      [req.params.id, req.user.id, reason, details || null]
+      [id, req.user.id, reason, details || null]
     );
     await client.query(
       "INSERT INTO order_timelines (order_id, status, notes) VALUES ($1,'return_requested',$2)",
-      [req.params.id, `Return requested. Reason: ${reason}`]
+      [id, `Return requested. Reason: ${reason}`]
     );
 
     await client.query("COMMIT");
+    log({ route: "POST /api/orders/my/:id/return", userId: req.user.id, orderId: id, status: 200 });
     return res.json({ success: true, message: "Return request submitted successfully" });
   } catch (err) {
     await client.query("ROLLBACK");
     if (err.status) {
+      log({ route: "POST /api/orders/my/:id/return", userId: req.user.id, orderId: id, status: err.status, message: err.message });
       return res.status(err.status).json({ success: false, message: err.message });
     }
-    logger.error("Return request error:", err.message);
+    lerr({ route: "POST /api/orders/my/:id/return", userId: req.user.id, orderId: id, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   } finally {
     client.release();
@@ -440,12 +463,13 @@ async function requestReturn(req, res) {
 // OPTIMIZED: 4 queries total regardless of result size (no N+1)
 // ==================================================================
 async function adminGetAllOrders(req, res) {
-  const page          = Math.max(parseInt(req.query.page)  || 1, 1);
-  const limit         = Math.min(parseInt(req.query.limit) || 20, 100);
-  const offset        = (page - 1) * limit;
-  const status        = req.query.status        || null;
+  const page = Math.max(parseInt(req.query.page) || 1, 1);
+  const limit = Math.min(parseInt(req.query.limit) || 20, 100);
+  const offset = (page - 1) * limit;
+  const status = req.query.status || null;
   const paymentStatus = req.query.paymentStatus || null;
-  const search        = req.query.search ? `%${req.query.search}%` : null;
+  const search = req.query.search ? `%${req.query.search}%` : null;
+  log({ route: "GET /api/orders/admin/list", query: { page, limit, status, paymentStatus, search }, status: "admin fetching all orders" });
 
   try {
     const result = await db.query(
@@ -475,17 +499,18 @@ async function adminGetAllOrders(req, res) {
       formatOrder(ord, itemsMap[ord.id] || [], timelinesMap[ord.id] || [])
     );
 
+    log({ route: "GET /api/orders/admin/list", status: 200, count: result.rows.length });
     return res.json({
       success: true,
       pagination: {
         page, limit,
-        total:      parseInt(countRes.rows[0].total),
+        total: parseInt(countRes.rows[0].total),
         totalPages: Math.ceil(parseInt(countRes.rows[0].total) / limit)
       },
       orders
     });
   } catch (err) {
-    logger.error("Admin get all orders error:", err.message);
+    lerr({ route: "GET /api/orders/admin/list", status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -495,18 +520,22 @@ async function adminGetAllOrders(req, res) {
 // Full single order detail.
 // ==================================================================
 async function adminGetOrderById(req, res) {
+  const { id } = req.params;
+  log({ route: "GET /api/orders/admin/:id", orderId: id, status: "admin fetching order detail" });
   try {
     const result = await db.query(
       "SELECT * FROM orders WHERE id = $1",
-      [req.params.id]
+      [id]
     );
     if (result.rows.length === 0) {
+      log({ route: "GET /api/orders/admin/:id", orderId: id, status: 404, message: "Order not found" });
       return res.status(404).json({ success: false, message: "Order not found" });
     }
-    const { items, timeline } = await fetchItemsAndTimeline(req.params.id);
+    const { items, timeline } = await fetchItemsAndTimeline(id);
+    log({ route: "GET /api/orders/admin/:id", orderId: id, status: 200 });
     return res.json({ success: true, order: formatOrder(result.rows[0], items, timeline) });
   } catch (err) {
-    logger.error("Admin get order error:", err.message);
+    lerr({ route: "GET /api/orders/admin/:id", orderId: id, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -517,8 +546,12 @@ async function adminGetOrderById(req, res) {
 // Body: { status, notes?, courierName?, trackingNumber?, trackingUrl? }
 // ==================================================================
 async function adminUpdateStatus(req, res) {
+  const { id } = req.params;
   const { status, notes, courierName, trackingNumber, trackingUrl } = req.body;
+  log({ route: "PUT /api/orders/admin/:id/status", orderId: id, body: { status, notes, courierName, trackingNumber, trackingUrl }, status: "admin updating order status" });
+
   if (!status) {
+    log({ route: "PUT /api/orders/admin/:id/status", orderId: id, status: 400, message: "status is required" });
     return res.status(400).json({ success: false, message: "status is required" });
   }
 
@@ -528,7 +561,7 @@ async function adminUpdateStatus(req, res) {
 
     const ordRes = await client.query(
       "SELECT status FROM orders WHERE id = $1 FOR UPDATE",
-      [req.params.id]
+      [id]
     );
     if (ordRes.rows.length === 0) {
       const e = new Error("Order not found"); e.status = 404; throw e;
@@ -544,14 +577,14 @@ async function adminUpdateStatus(req, res) {
          tracking_url    = COALESCE($4, tracking_url),
          updated_at      = NOW()
        WHERE id = $5`,
-      [status, courierName || null, trackingNumber || null, trackingUrl || null, req.params.id]
+      [status, courierName || null, trackingNumber || null, trackingUrl || null, id]
     );
 
     // Restore stock if admin is cancelling an active order
     if (currentStatus !== "cancelled" && status === "cancelled") {
       const itemsRes = await client.query(
         "SELECT variant_id, quantity FROM order_items WHERE order_id = $1",
-        [req.params.id]
+        [id]
       );
       for (const item of itemsRes.rows) {
         if (item.variant_id) {
@@ -565,17 +598,19 @@ async function adminUpdateStatus(req, res) {
 
     await client.query(
       "INSERT INTO order_timelines (order_id, status, notes) VALUES ($1,$2,$3)",
-      [req.params.id, status, notes || `Order status updated to: ${status}`]
+      [id, status, notes || `Order status updated to: ${status}`]
     );
 
     await client.query("COMMIT");
+    log({ route: "PUT /api/orders/admin/:id/status", orderId: id, status: 200 });
     return res.json({ success: true, message: "Order updated successfully" });
   } catch (err) {
     await client.query("ROLLBACK");
     if (err.status) {
+      log({ route: "PUT /api/orders/admin/:id/status", orderId: id, status: err.status, message: err.message });
       return res.status(err.status).json({ success: false, message: err.message });
     }
-    logger.error("Admin update status error:", err.message);
+    lerr({ route: "PUT /api/orders/admin/:id/status", orderId: id, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   } finally {
     client.release();
@@ -589,6 +624,7 @@ async function adminUpdateStatus(req, res) {
 // ==================================================================
 async function adminGetReturns(req, res) {
   const status = req.query.status || null;
+  log({ route: "GET /api/orders/admin/returns", status, statusMsg: "admin fetching return requests" });
   try {
     const result = await db.query(
       `SELECT rr.*, u.full_name AS customer_name, u.email AS customer_email, u.phone AS customer_phone
@@ -598,9 +634,10 @@ async function adminGetReturns(req, res) {
        ORDER BY rr.created_at DESC`,
       [status]
     );
+    log({ route: "GET /api/orders/admin/returns", status, status: 200, count: result.rows.length });
     return res.json({ success: true, returns: result.rows });
   } catch (err) {
-    logger.error("Admin get returns error:", err.message);
+    lerr({ route: "GET /api/orders/admin/returns", status, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -612,9 +649,12 @@ async function adminGetReturns(req, res) {
 // completed → restores stock + marks order returned
 // ==================================================================
 async function adminUpdateReturn(req, res) {
+  const { requestId } = req.params;
   const { status, adminNotes } = req.body;
+  log({ route: "PUT /api/orders/admin/returns/:requestId", requestId, body: { status, adminNotes }, status: "admin updating return request" });
   const validStatuses = ["approved", "rejected", "completed"];
   if (!status || !validStatuses.includes(status)) {
+    log({ route: "PUT /api/orders/admin/returns/:requestId", requestId, status: 400, message: "invalid status" });
     return res.status(400).json({ success: false, message: "status must be approved, rejected or completed" });
   }
 
@@ -624,7 +664,7 @@ async function adminUpdateReturn(req, res) {
 
     const retRes = await client.query(
       "SELECT * FROM return_requests WHERE id = $1 FOR UPDATE",
-      [req.params.requestId]
+      [requestId]
     );
     if (retRes.rows.length === 0) {
       const e = new Error("Return request not found"); e.status = 404; throw e;
@@ -640,8 +680,8 @@ async function adminUpdateReturn(req, res) {
     const orderStatusMap = { approved: "return_requested", rejected: "delivered", completed: "returned" };
     const newOrderStatus = orderStatusMap[status];
     const tlNote = {
-      approved:  `Return approved. Notes: ${adminNotes || "None"}`,
-      rejected:  `Return rejected. Notes: ${adminNotes || "None"}`,
+      approved: `Return approved. Notes: ${adminNotes || "None"}`,
+      rejected: `Return rejected. Notes: ${adminNotes || "None"}`,
       completed: `Return completed. Refund processed. Notes: ${adminNotes || "None"}`
     }[status];
 
@@ -671,13 +711,15 @@ async function adminUpdateReturn(req, res) {
     );
 
     await client.query("COMMIT");
+    log({ route: "PUT /api/orders/admin/returns/:requestId", requestId, status: 200 });
     return res.json({ success: true, message: "Return request updated successfully" });
   } catch (err) {
     await client.query("ROLLBACK");
     if (err.status) {
+      log({ route: "PUT /api/orders/admin/returns/:requestId", requestId, status: err.status, message: err.message });
       return res.status(err.status).json({ success: false, message: err.message });
     }
-    logger.error("Admin update return error:", err.message);
+    lerr({ route: "PUT /api/orders/admin/returns/:requestId", requestId, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   } finally {
     client.release();

@@ -1,5 +1,7 @@
-const db     = require("../config/db.js");
-const logger = require("../utils/logger.js");
+const db = require("../config/db.js");
+
+const log = (data) => console.log(data);
+const lerr = (data) => console.error(data);
 
 // ------------------------------------------------------------------
 // Helper: parse numeric safely
@@ -13,6 +15,7 @@ const num = (v) => parseFloat(v) || 0;
 // this week, this month, and all-time.
 // ==================================================================
 async function getSummary(req, res) {
+  log({ route: "GET /api/dashboard/summary", status: "fetching summary stats" });
   try {
     const stats = await db.query(`
       SELECT
@@ -67,48 +70,49 @@ async function getSummary(req, res) {
     const s = stats.rows[0];
     const c = customers.rows[0];
 
+    log({ route: "GET /api/dashboard/summary", status: 200 });
     return res.json({
       success: true,
       summary: {
         allTime: {
-          orders:         parseInt(s.total_orders),
-          revenue:        num(s.total_revenue),
-          discount:       num(s.total_discount),
-          delivery:       num(s.total_delivery),
-          avgOrderValue:  num(s.avg_order_value)
+          orders: parseInt(s.total_orders),
+          revenue: num(s.total_revenue),
+          discount: num(s.total_discount),
+          delivery: num(s.total_delivery),
+          avgOrderValue: num(s.avg_order_value)
         },
         today: {
-          orders:  parseInt(s.today_orders),
+          orders: parseInt(s.today_orders),
           revenue: num(s.today_revenue)
         },
         thisWeek: {
-          orders:  parseInt(s.week_orders),
+          orders: parseInt(s.week_orders),
           revenue: num(s.week_revenue)
         },
         thisMonth: {
-          orders:  parseInt(s.month_orders),
+          orders: parseInt(s.month_orders),
           revenue: num(s.month_revenue)
         },
         orderStatus: {
-          pending:    parseInt(s.pending_orders),
+          pending: parseInt(s.pending_orders),
           processing: parseInt(s.processing_orders),
-          delivered:  parseInt(s.delivered_orders),
-          cancelled:  parseInt(s.cancelled_orders)
+          delivered: parseInt(s.delivered_orders),
+          cancelled: parseInt(s.cancelled_orders)
         },
         customers: {
-          total:      parseInt(c.total_customers),
-          todayNew:   parseInt(c.today_new),
-          weekNew:    parseInt(c.week_new),
-          monthNew:   parseInt(c.month_new)
+          total: parseInt(c.total_customers),
+          todayNew: parseInt(c.today_new),
+          weekNew: parseInt(c.week_new),
+          monthNew: parseInt(c.month_new)
         },
         alerts: {
           lowStockVariants: parseInt(lowStock.rows[0].low_stock_count),
-          pendingReturns:   parseInt(pendingReturns.rows[0].pending_returns)
+          pendingReturns: parseInt(pendingReturns.rows[0].pending_returns)
         }
       }
     });
   } catch (err) {
-    logger.error("Dashboard summary error:", err.message);
+    lerr({ route: "GET /api/dashboard/summary", status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -120,6 +124,7 @@ async function getSummary(req, res) {
 // ==================================================================
 async function getRevenueChart(req, res) {
   const period = req.query.period || "daily";
+  log({ route: "GET /api/dashboard/revenue-chart", period, status: "fetching chart data" });
 
   const truncMap = { daily: "day", weekly: "week", monthly: "month" };
   const trunc = truncMap[period] || "day";
@@ -142,18 +147,19 @@ async function getRevenueChart(req, res) {
       ORDER BY period ASC
     `, [trunc]);
 
+    log({ route: "GET /api/dashboard/revenue-chart", period, status: 200, count: result.rows.length });
     return res.json({
       success: true,
       period,
       chart: result.rows.map(r => ({
-        period:   r.period,
-        orders:   parseInt(r.orders),
-        revenue:  num(r.revenue),
+        period: r.period,
+        orders: parseInt(r.orders),
+        revenue: num(r.revenue),
         discount: num(r.discount)
       }))
     });
   } catch (err) {
-    logger.error("Revenue chart error:", err.message);
+    lerr({ route: "GET /api/dashboard/revenue-chart", period, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -164,6 +170,7 @@ async function getRevenueChart(req, res) {
 // ==================================================================
 async function getTopProducts(req, res) {
   const limit = Math.min(parseInt(req.query.limit) || 10, 50);
+  log({ route: "GET /api/dashboard/top-products", limit, status: "fetching top products" });
 
   try {
     const result = await db.query(`
@@ -185,19 +192,20 @@ async function getTopProducts(req, res) {
       LIMIT $1
     `, [limit]);
 
+    log({ route: "GET /api/dashboard/top-products", limit, status: 200, count: result.rows.length });
     return res.json({
       success: true,
       topProducts: result.rows.map(r => ({
-        id:         r.id,
-        name:       r.name_ta ? `${r.name_en} (${r.name_ta})` : r.name_en,
-        category:   r.category,
-        unitsSold:  parseInt(r.units_sold),
-        revenue:    num(r.revenue),
+        id: r.id,
+        name: r.name_ta ? `${r.name_en} (${r.name_ta})` : r.name_en,
+        category: r.category,
+        unitsSold: parseInt(r.units_sold),
+        revenue: num(r.revenue),
         orderCount: parseInt(r.order_count)
       }))
     });
   } catch (err) {
-    logger.error("Top products error:", err.message);
+    lerr({ route: "GET /api/dashboard/top-products", limit, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -208,6 +216,7 @@ async function getTopProducts(req, res) {
 // ==================================================================
 async function getTopCustomers(req, res) {
   const limit = Math.min(parseInt(req.query.limit) || 10, 50);
+  log({ route: "GET /api/dashboard/top-customers", limit, status: "fetching top customers" });
 
   try {
     const result = await db.query(`
@@ -227,20 +236,21 @@ async function getTopCustomers(req, res) {
       LIMIT $1
     `, [limit]);
 
+    log({ route: "GET /api/dashboard/top-customers", limit, status: 200, count: result.rows.length });
     return res.json({
       success: true,
       topCustomers: result.rows.map(r => ({
-        id:          r.id,
-        name:        r.full_name,
-        email:       r.email,
-        phone:       r.phone,
+        id: r.id,
+        name: r.full_name,
+        email: r.email,
+        phone: r.phone,
         totalOrders: parseInt(r.total_orders),
-        totalSpent:  num(r.total_spent),
+        totalSpent: num(r.total_spent),
         lastOrderAt: r.last_order_at
       }))
     });
   } catch (err) {
-    logger.error("Top customers error:", err.message);
+    lerr({ route: "GET /api/dashboard/top-customers", limit, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -251,6 +261,7 @@ async function getTopCustomers(req, res) {
 // ==================================================================
 async function getLowStock(req, res) {
   const limit = Math.min(parseInt(req.query.limit) || 20, 100);
+  log({ route: "GET /api/dashboard/low-stock", limit, status: "fetching low stock variants" });
 
   try {
     const result = await db.query(`
@@ -268,18 +279,19 @@ async function getLowStock(req, res) {
       LIMIT $1
     `, [limit]);
 
+    log({ route: "GET /api/dashboard/low-stock", limit, status: 200, count: result.rows.length });
     return res.json({
       success: true,
       lowStock: result.rows.map(r => ({
-        variantId:   r.variant_id,
-        productId:   r.product_id,
-        name:        r.name_ta ? `${r.name_en} (${r.name_ta})` : r.name_en,
+        variantId: r.variant_id,
+        productId: r.product_id,
+        name: r.name_ta ? `${r.name_en} (${r.name_ta})` : r.name_en,
         weightLabel: r.weight_label,
-        stockQty:    parseInt(r.stock_qty)
+        stockQty: parseInt(r.stock_qty)
       }))
     });
   } catch (err) {
-    logger.error("Low stock error:", err.message);
+    lerr({ route: "GET /api/dashboard/low-stock", limit, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -290,6 +302,7 @@ async function getLowStock(req, res) {
 // ==================================================================
 async function getRecentOrders(req, res) {
   const limit = Math.min(parseInt(req.query.limit) || 10, 50);
+  log({ route: "GET /api/dashboard/recent-orders", limit, status: "fetching recent orders" });
 
   try {
     const result = await db.query(`
@@ -307,21 +320,22 @@ async function getRecentOrders(req, res) {
       LIMIT $1
     `, [limit]);
 
+    log({ route: "GET /api/dashboard/recent-orders", limit, status: 200, count: result.rows.length });
     return res.json({
       success: true,
       recentOrders: result.rows.map(r => ({
-        id:            r.id,
-        customerName:  r.customer_name,
+        id: r.id,
+        customerName: r.customer_name,
         customerPhone: r.customer_phone,
-        total:         num(r.total),
-        status:        r.status,
+        total: num(r.total),
+        status: r.status,
         paymentStatus: r.payment_status,
         paymentMethod: r.payment_method,
-        createdAt:     r.created_at
+        createdAt: r.created_at
       }))
     });
   } catch (err) {
-    logger.error("Recent orders error:", err.message);
+    lerr({ route: "GET /api/dashboard/recent-orders", limit, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -331,6 +345,7 @@ async function getRecentOrders(req, res) {
 // Revenue breakdown per category.
 // ==================================================================
 async function getSalesByCategory(req, res) {
+  log({ route: "GET /api/dashboard/sales-by-category", status: "fetching sales breakdown" });
   try {
     const result = await db.query(`
       SELECT
@@ -347,17 +362,18 @@ async function getSalesByCategory(req, res) {
       ORDER BY revenue DESC
     `);
 
+    log({ route: "GET /api/dashboard/sales-by-category", status: 200, count: result.rows.length });
     return res.json({
       success: true,
       salesByCategory: result.rows.map(r => ({
-        category:   r.category,
+        category: r.category,
         orderCount: parseInt(r.order_count),
-        unitsSold:  parseInt(r.units_sold),
-        revenue:    num(r.revenue)
+        unitsSold: parseInt(r.units_sold),
+        revenue: num(r.revenue)
       }))
     });
   } catch (err) {
-    logger.error("Sales by category error:", err.message);
+    lerr({ route: "GET /api/dashboard/sales-by-category", status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -368,7 +384,8 @@ async function getSalesByCategory(req, res) {
 // ==================================================================
 async function getReturnRequests(req, res) {
   const status = req.query.status || null;
-  const limit  = Math.min(parseInt(req.query.limit) || 20, 100);
+  const limit = Math.min(parseInt(req.query.limit) || 20, 100);
+  log({ route: "GET /api/dashboard/return-requests", status, limit, statusMsg: "fetching return requests" });
 
   try {
     const result = await db.query(`
@@ -390,12 +407,13 @@ async function getReturnRequests(req, res) {
       LIMIT $2
     `, [status, limit]);
 
+    log({ route: "GET /api/dashboard/return-requests", status, limit, status: 200, count: result.rows.length });
     return res.json({
       success: true,
       returnRequests: result.rows
     });
   } catch (err) {
-    logger.error("Return requests error:", err.message);
+    lerr({ route: "GET /api/dashboard/return-requests", status, limit, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }

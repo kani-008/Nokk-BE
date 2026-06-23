@@ -1,24 +1,23 @@
 const { Pool } = require('pg');
 require('dotenv').config();
-const logger = require("../utils/logger.js");
 
 const { DB_USER, DB_PASSWORD, DB_HOST, DB_PORT, DB_NAME } = process.env;
 
 if (!DB_USER || !DB_PASSWORD || !DB_HOST || !DB_PORT || !DB_NAME) {
-  logger.error('CRITICAL: One or more DB_* environment variables are missing!');
+  console.error('CRITICAL: One or more DB_* environment variables are missing!');
   process.exit(1);
 }
 
 const pool = new Pool({
-  user:     DB_USER,
+  user: DB_USER,
   password: DB_PASSWORD,
-  host:     DB_HOST,
-  port:     Number(DB_PORT),
+  host: DB_HOST,
+  port: Number(DB_PORT),
   database: DB_NAME,
-  ssl:      { rejectUnauthorized: false },
+  ssl: { rejectUnauthorized: false },
   // Force IPv4 — avoids ETIMEDOUT when DNS resolves to an unreachable IPv6 address
   connectionTimeoutMillis: 10000,
-  options:  "-c TimeZone=UTC"
+  options: "-c TimeZone=UTC"
 });
 
 // Monkey-patch pg to prefer IPv4
@@ -28,9 +27,9 @@ dns.setDefaultResultOrder("ipv4first");
 // Verify the connection works on startup
 pool.query('SELECT NOW()', (err, res) => {
   if (err) {
-    logger.error('PostgreSQL pool failed to initialize:', err.message);
+    console.error('PostgreSQL pool failed to initialize:', err.message);
   } else {
-    logger.db('Pool ready  |  server time:', res.rows[0].now);
+    console.log('Pool ready  |  server time:', res.rows[0].now);
   }
 });
 

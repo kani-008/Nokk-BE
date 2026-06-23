@@ -1,5 +1,7 @@
-const db     = require("../config/db.js");
-const logger = require("../utils/logger.js");
+const db = require("../config/db.js");
+
+const log = (data) => console.log(data);
+const lerr = (data) => console.error(data);
 
 // Inventory = product_variants table — all stock management lives here.
 // product_variants columns: id, product_id, weight_grams, weight_label,
@@ -16,13 +18,14 @@ const num = (v) => parseFloat(v) || 0;
 //        ?search=text  ?page=1  ?limit=50
 // ==================================================================
 async function getInventory(req, res) {
-  const page       = Math.max(parseInt(req.query.page)  || 1, 1);
-  const limit      = Math.min(parseInt(req.query.limit) || 50, 200);
-  const offset     = (page - 1) * limit;
-  const lowStock   = req.query.lowStock   === "true";
+  const page = Math.max(parseInt(req.query.page) || 1, 1);
+  const limit = Math.min(parseInt(req.query.limit) || 50, 200);
+  const offset = (page - 1) * limit;
+  const lowStock = req.query.lowStock === "true";
   const outOfStock = req.query.outOfStock === "true";
-  const catSlug    = req.query.category   || null;
-  const search     = req.query.search     || null;
+  const catSlug = req.query.category || null;
+  const search = req.query.search || null;
+  log({ route: "GET /api/inventory", query: { page, limit, lowStock, outOfStock, catSlug, search }, status: "fetching inventory" });
 
   try {
     const result = await db.query(
@@ -73,37 +76,38 @@ async function getInventory(req, res) {
       [lowStock, outOfStock, catSlug, search]
     );
 
+    log({ route: "GET /api/inventory", status: 200, count: result.rows.length });
     return res.json({
       success: true,
       pagination: {
         page, limit,
-        total:      parseInt(countRes.rows[0].total),
+        total: parseInt(countRes.rows[0].total),
         totalPages: Math.ceil(parseInt(countRes.rows[0].total) / limit)
       },
       inventory: result.rows.map(r => ({
-        variantId:      r.variant_id,
-        weightLabel:    r.weight_label,
-        weightGrams:    r.weight_grams,
-        price:          num(r.price),
-        comparePrice:   r.compare_price ? num(r.compare_price) : null,
-        stockQty:       parseInt(r.stock_qty),
-        isActive:       r.is_active,
-        stockStatus:    parseInt(r.stock_qty) === 0 ? "out_of_stock"
-                        : parseInt(r.stock_qty) <= 10 ? "low_stock" : "in_stock",
+        variantId: r.variant_id,
+        weightLabel: r.weight_label,
+        weightGrams: r.weight_grams,
+        price: num(r.price),
+        comparePrice: r.compare_price ? num(r.compare_price) : null,
+        stockQty: parseInt(r.stock_qty),
+        isActive: r.is_active,
+        stockStatus: parseInt(r.stock_qty) === 0 ? "out_of_stock"
+          : parseInt(r.stock_qty) <= 10 ? "low_stock" : "in_stock",
         stockUpdatedAt: r.stock_updated_at,
-        productId:      r.product_id,
-        name:           r.name_ta ? `${r.name_en} (${r.name_ta})` : r.name_en,
-        nameEn:         r.name_en,
-        nameTa:         r.name_ta,
-        slug:           r.slug,
-        productActive:  r.product_active,
-        categoryName:   r.category_name,
-        categorySlug:   r.category_slug,
-        primaryImage:   r.primary_image
+        productId: r.product_id,
+        name: r.name_ta ? `${r.name_en} (${r.name_ta})` : r.name_en,
+        nameEn: r.name_en,
+        nameTa: r.name_ta,
+        slug: r.slug,
+        productActive: r.product_active,
+        categoryName: r.category_name,
+        categorySlug: r.category_slug,
+        primaryImage: r.primary_image
       }))
     });
   } catch (err) {
-    logger.error("Get inventory error:", err.message);
+    lerr({ route: "GET /api/inventory", status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -113,6 +117,7 @@ async function getInventory(req, res) {
 // Stock summary counts for the admin inventory dashboard card.
 // ==================================================================
 async function getInventorySummary(req, res) {
+  log({ route: "GET /api/inventory/summary", status: "fetching inventory summary" });
   try {
     const result = await db.query(
       `SELECT
@@ -125,9 +130,10 @@ async function getInventorySummary(req, res) {
        FROM product_variants pv
        WHERE pv.is_active = TRUE`
     );
+    log({ route: "GET /api/inventory/summary", status: 200 });
     return res.json({ success: true, summary: result.rows[0] });
   } catch (err) {
-    logger.error("Inventory summary error:", err.message);
+    lerr({ route: "GET /api/inventory/summary", status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -139,13 +145,17 @@ async function getInventorySummary(req, res) {
 // This is the main "update stock" action from the inventory page.
 // ==================================================================
 async function updateStock(req, res) {
+  const { variantId } = req.params;
   const { stockQty, price, comparePrice, isActive } = req.body;
+  log({ route: "PUT /api/inventory/:variantId", variantId, body: { stockQty, price, comparePrice, isActive }, status: "updating variant stock" });
 
   if (stockQty === undefined && price === undefined &&
-      comparePrice === undefined && isActive === undefined) {
+    comparePrice === undefined && isActive === undefined) {
+    log({ route: "PUT /api/inventory/:variantId", variantId, status: 400, message: "Nothing to update" });
     return res.status(400).json({ success: false, message: "Nothing to update" });
   }
   if (stockQty !== undefined && (isNaN(stockQty) || stockQty < 0)) {
+    log({ route: "PUT /api/inventory/:variantId", variantId, status: 400, message: "stockQty must be 0 or more" });
     return res.status(400).json({ success: false, message: "stockQty must be 0 or more" });
   }
 
@@ -160,33 +170,35 @@ async function updateStock(req, res) {
        WHERE id = $5
        RETURNING id, product_id, weight_label, stock_qty, price, compare_price, is_active, updated_at`,
       [
-        stockQty      !== undefined ? parseInt(stockQty) : null,
-        price         !== undefined ? num(price)         : null,
-        comparePrice  !== undefined ? num(comparePrice)  : null,
-        isActive      !== undefined ? isActive           : null,
-        req.params.variantId
+        stockQty !== undefined ? parseInt(stockQty) : null,
+        price !== undefined ? num(price) : null,
+        comparePrice !== undefined ? num(comparePrice) : null,
+        isActive !== undefined ? isActive : null,
+        variantId
       ]
     );
     if (result.rows.length === 0) {
+      log({ route: "PUT /api/inventory/:variantId", variantId, status: 404, message: "Variant not found" });
       return res.status(404).json({ success: false, message: "Variant not found" });
     }
     const v = result.rows[0];
+    log({ route: "PUT /api/inventory/:variantId", variantId, status: 200 });
     return res.json({
       success: true,
       message: "Stock updated",
       variant: {
-        variantId:    v.id,
-        productId:    v.product_id,
-        weightLabel:  v.weight_label,
-        stockQty:     parseInt(v.stock_qty),
-        price:        num(v.price),
+        variantId: v.id,
+        productId: v.product_id,
+        weightLabel: v.weight_label,
+        stockQty: parseInt(v.stock_qty),
+        price: num(v.price),
         comparePrice: v.compare_price ? num(v.compare_price) : null,
-        isActive:     v.is_active,
-        updatedAt:    v.updated_at
+        isActive: v.is_active,
+        updatedAt: v.updated_at
       }
     });
   } catch (err) {
-    logger.error("Update stock error:", err.message);
+    lerr({ route: "PUT /api/inventory/:variantId", variantId, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -198,11 +210,14 @@ async function updateStock(req, res) {
 // ==================================================================
 async function bulkUpdateStock(req, res) {
   const { updates } = req.body;
+  log({ route: "POST /api/inventory/bulk-update", updateCount: updates?.length, status: "bulk updating stock" });
 
   if (!Array.isArray(updates) || updates.length === 0) {
+    log({ route: "POST /api/inventory/bulk-update", status: 400, message: "updates array is required" });
     return res.status(400).json({ success: false, message: "updates array is required" });
   }
   if (updates.length > 100) {
+    log({ route: "POST /api/inventory/bulk-update", status: 400, message: "Maximum 100 variants per bulk update" });
     return res.status(400).json({ success: false, message: "Maximum 100 variants per bulk update" });
   }
 
@@ -222,9 +237,9 @@ async function bulkUpdateStock(req, res) {
          WHERE id = $4
          RETURNING id, weight_label, stock_qty, price`,
         [
-          item.stockQty     !== undefined ? parseInt(item.stockQty) : null,
-          item.price        !== undefined ? num(item.price)         : null,
-          item.comparePrice !== undefined ? num(item.comparePrice)  : null,
+          item.stockQty !== undefined ? parseInt(item.stockQty) : null,
+          item.price !== undefined ? num(item.price) : null,
+          item.comparePrice !== undefined ? num(item.comparePrice) : null,
           item.variantId
         ]
       );
@@ -232,6 +247,7 @@ async function bulkUpdateStock(req, res) {
     }
 
     await client.query("COMMIT");
+    log({ route: "POST /api/inventory/bulk-update", status: 200, updatedCount: results.length });
     return res.json({
       success: true,
       message: `${results.length} variant(s) updated`,
@@ -239,7 +255,7 @@ async function bulkUpdateStock(req, res) {
     });
   } catch (err) {
     await client.query("ROLLBACK");
-    logger.error("Bulk update stock error:", err.message);
+    lerr({ route: "POST /api/inventory/bulk-update", status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   } finally {
     client.release();
