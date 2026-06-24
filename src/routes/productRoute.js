@@ -1,7 +1,7 @@
 const express = require("express");
 const router  = express.Router();
 const {
-  getAllProducts, getProductBySlug,
+  getAllProducts, getProductBySlug, getWeightLabels,
   createProduct, updateProduct, deleteProduct,
   addVariant, updateVariant, deleteVariant,
   addImage, addImages, deleteImage,
@@ -14,8 +14,9 @@ const productImageUpload = uploadProduct.single("imageFile");
 const productImagesUpload = uploadProduct.array("imageFiles", 5); // max 5 per request
 
 // Public
-router.get("/get-all",      getAllProducts);
-router.get("/get-by-slug",  getProductBySlug);
+router.get("/get-all",       getAllProducts);
+router.get("/get-by-slug",   getProductBySlug);
+router.get("/weight-labels", getWeightLabels);
 
 // Customer (login required)
 router.post("/add-review",  authenticate, addReview);

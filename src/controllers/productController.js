@@ -56,7 +56,7 @@ function formatVariant(v) {
     // Customer-facing UI should only ever read this boolean, never
     // stockQty directly — keeps the "no exact numbers" rule enforced
     // at the API boundary, not just by convention in each component.
-    inStock: v.in_stock !== undefined ? v.in_stock : parseInt(v.stock_qty) > 0,
+    inStock: parseInt(v.stock_qty) > 0,
     isActive: v.is_active,
     createdAt: v.created_at,
     updatedAt: v.updated_at
@@ -90,29 +90,46 @@ function formatReview(r) {
 }
 
 async function fetchVariantsImagesReviews(productId) {
-  const [varRes, imgRes, revRes] = await Promise.all([
-    db.query(
-      `SELECT * FROM product_variants WHERE product_id = $1 ORDER BY weight_grams ASC`,
-      [productId]
-    ),
-    db.query(
-      `SELECT * FROM product_images WHERE product_id = $1 ORDER BY sort_order ASC`,
-      [productId]
-    ),
-    db.query(
-      `SELECT pr.*, u.full_name
-       FROM product_reviews pr
-       LEFT JOIN users u ON u.id = pr.user_id
-       WHERE pr.product_id = $1 AND pr.is_approved = TRUE
-       ORDER BY pr.created_at DESC`,
-      [productId]
-    )
-  ]);
-  return {
-    variants: varRes.rows.map(formatVariant),
-    images: imgRes.rows.map(formatImage),
-    reviews: revRes.rows.map(formatReview)
-  };
+  try {
+    const [varRes, imgRes, revRes] = await Promise.all([
+      db.query(
+        `SELECT * FROM product_variants WHERE product_id = $1 ORDER BY weight_grams ASC`,
+        [productId]
+      ).catch(err => {
+        const dbErr = new Error(`Database error fetching product variants for product ${productId}: ${err.message}`);
+        dbErr.status = 500;
+        throw dbErr;
+      }),
+      db.query(
+        `SELECT * FROM product_images WHERE product_id = $1 ORDER BY sort_order ASC`,
+        [productId]
+      ).catch(err => {
+        const dbErr = new Error(`Database error fetching product images for product ${productId}: ${err.message}`);
+        dbErr.status = 500;
+        throw dbErr;
+      }),
+      db.query(
+        `SELECT pr.*, u.full_name
+         FROM product_reviews pr
+         LEFT JOIN users u ON u.id = pr.user_id
+         WHERE pr.product_id = $1 AND pr.is_approved = TRUE
+         ORDER BY pr.created_at DESC`,
+        [productId]
+      ).catch(err => {
+        const dbErr = new Error(`Database error fetching reviews for product ${productId}: ${err.message}`);
+        dbErr.status = 500;
+        throw dbErr;
+      })
+    ]);
+    return {
+      variants: varRes.rows.map(formatVariant),
+      images: imgRes.rows.map(formatImage),
+      reviews: revRes.rows.map(formatReview)
+    };
+  } catch (err) {
+    console.error(`[fetchVariantsImagesReviews] error: ${err.message}`);
+    throw err;
+  }
 }
 
 // Auto-generate slug from English name
@@ -121,79 +138,125 @@ function makeSlug(nameEn) {
 }
 
 // ==================================================================
-// PUBLIC — GET /api/products
-// Full product listing with filters. Uses v_products_with_price view.
+// PUBLIC — GET /api/products/get-all
+// Full product listing with server-side filters. Uses v_products_with_price.
 // Query: ?category=slug  ?search=text  ?sort=popular|newest|
 //         price-low-high|price-high-low  ?inStock=true
-//         ?isBestseller=true  ?isNew=true  ?page=1  ?limit=12
+//         ?isBestseller=true  ?isNew=true  ?minPrice=num  ?maxPrice=num
+//         ?rating=num  ?hasOffer=true  ?weight=100g,250g  ?page=1  ?limit=12
 // ==================================================================
 async function getAllProducts(req, res) {
-  const page = Math.max(parseInt(req.query.page) || 1, 1);
-  const limit = Math.min(parseInt(req.query.limit) || 12, 100);
-  const offset = (page - 1) * limit;
-  const search = req.query.search || null;
-  const catSlug = req.query.category || null;
-  const inStock = req.query.inStock === "true";
-  const isBest = req.query.isBestseller === "true";
-  const isNew = req.query.isNew === "true";
-  console.log({ route: "GET /api/products", query: { page, limit, search, category: catSlug, inStock, isBestseller: isBest, isNew }, status: "fetching products" });
+  const page     = Math.max(parseInt(req.query.page) || 1, 1);
+  const limit    = Math.min(parseInt(req.query.limit) || 12, 100);
+  const offset   = (page - 1) * limit;
+  const search   = req.query.search   || null;
+  const catSlug  = req.query.category || null;
+  const inStock  = req.query.inStock      === "true";
+  const isBest   = req.query.isBestseller === "true";
+  const isNew    = req.query.isNew        === "true";
+  const hasOffer = req.query.hasOffer     === "true";
+  const minPrice = req.query.minPrice ? parseFloat(req.query.minPrice) : null;
+  const maxPrice = req.query.maxPrice ? parseFloat(req.query.maxPrice) : null;
+  const minRating = req.query.rating ? parseFloat(req.query.rating) : null;
+  const weightLabels = req.query.weight
+    ? req.query.weight.split(",").filter(Boolean)
+    : null;
 
   const sortMap = {
-    "popular": "avg_rating DESC, review_count DESC",
-    "newest": "created_at DESC",
-    "price-low-high": "min_price ASC",
-    "price-high-low": "min_price DESC"
+    "popular":        "v.avg_rating DESC, v.review_count DESC",
+    "newest":         "v.created_at DESC",
+    "price-low-high": "v.min_price ASC",
+    "price-high-low": "v.min_price DESC"
   };
-  const orderBy = sortMap[req.query.sort] || "avg_rating DESC, review_count DESC";
+  const orderBy = sortMap[req.query.sort] || "v.avg_rating DESC, v.review_count DESC";
+
+  // Shared WHERE params: $1…$10
+  const baseParams = [
+    catSlug,      // $1
+    search,       // $2
+    inStock,      // $3
+    isBest,       // $4
+    isNew,        // $5
+    minPrice,     // $6
+    maxPrice,     // $7
+    minRating,    // $8
+    hasOffer,     // $9
+    weightLabels, // $10  (null or string[])
+  ];
+
+  const whereClause = `
+    v.is_active = TRUE
+    AND ($1::text    IS NULL OR v.category_slug = $1)
+    AND ($2::text    IS NULL OR
+          v.name_en    ILIKE '%' || $2 || '%' OR
+          v.name_ta    ILIKE '%' || $2 || '%' OR
+          v.description ILIKE '%' || $2 || '%')
+    AND (NOT $3 OR v.total_stock > 0)
+    AND (NOT $4 OR v.is_bestseller = TRUE)
+    AND (NOT $5 OR v.is_new = TRUE)
+    AND ($6::numeric IS NULL OR v.min_price >= $6)
+    AND ($7::numeric IS NULL OR v.min_price <= $7)
+    AND ($8::numeric IS NULL OR v.avg_rating >= $8)
+    AND (NOT $9 OR EXISTS (
+          SELECT 1 FROM product_variants pv
+          WHERE pv.product_id = v.id
+            AND pv.is_active = TRUE
+            AND pv.compare_price > pv.price
+        ))
+    AND ($10::text[] IS NULL OR EXISTS (
+          SELECT 1 FROM product_variants pv
+          WHERE pv.product_id = v.id
+            AND pv.is_active = TRUE
+            AND pv.weight_label = ANY($10)
+        ))
+  `;
+
+  console.log({
+    route: "GET /api/products",
+    query: { page, limit, search, category: catSlug, inStock, isBest, isNew, hasOffer, minPrice, maxPrice, minRating, weightLabels },
+    status: "fetching products"
+  });
 
   try {
     const result = await db.query(
       `SELECT v.*
        FROM v_products_with_price v
-       WHERE v.is_active = TRUE
-         AND ($1::text IS NULL OR v.category_slug = $1)
-         AND ($2::text IS NULL OR
-               v.name_en    ILIKE '%' || $2 || '%' OR
-               v.name_ta    ILIKE '%' || $2 || '%' OR
-               v.description ILIKE '%' || $2 || '%')
-         AND (NOT $3 OR v.total_stock > 0)
-         AND (NOT $4 OR v.is_bestseller = TRUE)
-         AND (NOT $5 OR v.is_new = TRUE)
+       WHERE ${whereClause}
        ORDER BY ${orderBy}
-       LIMIT $6 OFFSET $7`,
-      [catSlug, search, inStock, isBest, isNew, limit, offset]
+       LIMIT $11 OFFSET $12`,
+      [...baseParams, limit, offset]
     );
 
     const countRes = await db.query(
       `SELECT COUNT(*) AS total
        FROM v_products_with_price v
-       WHERE v.is_active = TRUE
-         AND ($1::text IS NULL OR v.category_slug = $1)
-         AND ($2::text IS NULL OR
-               v.name_en    ILIKE '%' || $2 || '%' OR
-               v.name_ta    ILIKE '%' || $2 || '%' OR
-               v.description ILIKE '%' || $2 || '%')
-         AND (NOT $3 OR v.total_stock > 0)
-         AND (NOT $4 OR v.is_bestseller = TRUE)
-         AND (NOT $5 OR v.is_new = TRUE)`,
-      [catSlug, search, inStock, isBest, isNew]
+       WHERE ${whereClause}`,
+      baseParams
     );
 
     console.log({ route: "GET /api/products", status: 200, count: result.rows.length });
 
     let variantsByProduct = {};
-    let imagesByProduct = {};
+    let imagesByProduct   = {};
     if (result.rows.length > 0) {
       const productIds = result.rows.map(r => r.id);
       const [varRes, imgRes] = await Promise.all([
         db.query(
           `SELECT * FROM product_variants WHERE product_id = ANY($1) AND is_active = TRUE ORDER BY weight_grams ASC`,
           [productIds]
-        ),
+        ).catch(err => {
+          const dbErr = new Error(`Database error fetching product variants: ${err.message}`);
+          dbErr.status = 500;
+          throw dbErr;
+        }),
         db.query(
           `SELECT * FROM product_images WHERE product_id = ANY($1) ORDER BY sort_order ASC`,
           [productIds]
-        )
+        ).catch(err => {
+          const dbErr = new Error(`Database error fetching product images: ${err.message}`);
+          dbErr.status = 500;
+          throw dbErr;
+        })
       ]);
 
       varRes.rows.forEach(v => {
@@ -213,14 +276,42 @@ async function getAllProducts(req, res) {
       success: true,
       pagination: {
         page, limit,
-        total: parseInt(countRes.rows[0].total),
+        total:      parseInt(countRes.rows[0].total),
         totalPages: Math.ceil(parseInt(countRes.rows[0].total) / limit)
       },
-      products: result.rows.map(p => formatProduct(p, variantsByProduct[p.id] || [], imagesByProduct[p.id] || []))
+      products: result.rows.map(p =>
+        formatProduct(p, variantsByProduct[p.id] || [], imagesByProduct[p.id] || [])
+      )
     });
   } catch (err) {
-    console.error({ route: "GET /api/products", status: 500, error: err.message });
-    return res.status(500).json({ success: false, message: "Internal server error" });
+    const statusCode = err.status || 500;
+    console.error({ route: "GET /api/products", status: statusCode, error: err.message });
+    return res.status(statusCode).json({ success: false, message: err.message });
+  }
+}
+
+// ==================================================================
+// PUBLIC — GET /api/products/weight-labels
+// Returns all distinct weight labels available across active variants.
+// Used by the Products page sidebar filter.
+// ==================================================================
+async function getWeightLabels(req, res) {
+  try {
+    const result = await db.query(
+      `SELECT DISTINCT weight_label
+       FROM product_variants
+       WHERE is_active = TRUE
+         AND weight_label IS NOT NULL
+         AND weight_label <> ''
+       ORDER BY weight_label`
+    );
+    return res.json({
+      success: true,
+      weightLabels: result.rows.map(r => r.weight_label)
+    });
+  } catch (err) {
+    console.error({ route: "GET /api/products/weight-labels", error: err.message });
+    return res.status(500).json({ success: false, message: err.message });
   }
 }
 
@@ -955,7 +1046,7 @@ async function deleteReview(req, res) {
 }
 
 module.exports = {
-  getAllProducts, getProductBySlug,
+  getAllProducts, getProductBySlug, getWeightLabels,
   createProduct, updateProduct, deleteProduct,
   addVariant, updateVariant, deleteVariant,
   addImage, addImages, deleteImage,
