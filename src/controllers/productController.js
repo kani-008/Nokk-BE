@@ -336,27 +336,46 @@ async function updateProduct(req, res) {
     id, nameEn, nameTa, slug, description, howToUse,
     storageTips, categoryId, isBestseller, isNew, isActive
   } = req.body;
-  console.log({ route: "PUT /api/products/update-product", productId: id, body: { nameEn, nameTa, slug, categoryId, isBestseller, isNew, isActive }, status: "updating product" });
 
+  const hasVariants = Array.isArray(req.body.variants);
+  const hasImages = Array.isArray(req.body.images);
+
+  console.log({ 
+    route: "PUT /api/products/update-product", 
+    productId: id, 
+    body: { nameEn, nameTa, slug, categoryId, isBestseller, isNew, isActive, hasVariants, hasImages }, 
+    status: "updating product" 
+  });
+
+  if (!id) {
+    return res.status(400).json({ success: false, message: "Product ID is required" });
+  }
+
+  const client = await db.getClient();
   try {
-    const existing = await db.query("SELECT id FROM products WHERE id = $1", [id]);
+    await client.query("BEGIN");
+
+    const existing = await client.query("SELECT id FROM products WHERE id = $1", [id]);
     if (existing.rows.length === 0) {
+      await client.query("ROLLBACK");
       console.log({ route: "PUT /api/products/update-product", productId: id, status: 404, message: "Product not found" });
       return res.status(404).json({ success: false, message: "Product not found" });
     }
 
     if (slug) {
-      const dup = await db.query(
+      const dup = await client.query(
         "SELECT id FROM products WHERE slug = $1 AND id != $2",
         [slug.trim(), id]
       );
       if (dup.rows.length > 0) {
+        await client.query("ROLLBACK");
         console.log({ route: "PUT /api/products/update-product", productId: id, status: 409, message: "slug already exists" });
         return res.status(409).json({ success: false, message: "Slug already used by another product" });
       }
     }
 
-    const result = await db.query(
+    // 1. Update Core Product Table
+    const prodUpdateRes = await client.query(
       `UPDATE products SET
          name_en      = COALESCE($1, name_en),
          name_ta      = COALESCE($2, name_ta),
@@ -385,12 +404,148 @@ async function updateProduct(req, res) {
         id
       ]
     );
+
+    // 2. Sync Variants (if provided)
+    if (hasVariants) {
+      const currentVarsRes = await client.query(
+        "SELECT id FROM product_variants WHERE product_id = $1", 
+        [id]
+      );
+      const currentVarIds = currentVarsRes.rows.map(r => r.id);
+      const incomingVarIds = req.body.variants.filter(v => v.id).map(v => v.id);
+
+      // Deactivate variants not in incoming request body
+      const varIdsToDeactivate = currentVarIds.filter(cid => !incomingVarIds.includes(cid));
+      if (varIdsToDeactivate.length > 0) {
+        await client.query(
+          "UPDATE product_variants SET is_active = FALSE, updated_at = NOW() WHERE product_id = $1 AND id = ANY($2)",
+          [id, varIdsToDeactivate]
+        );
+      }
+
+      // Upsert incoming variants
+      for (const v of req.body.variants) {
+        if (!v.weightLabel || !v.price) continue;
+        if (v.id && currentVarIds.includes(v.id)) {
+          // Update
+          await client.query(
+            `UPDATE product_variants SET
+               weight_grams  = COALESCE($1, weight_grams),
+               weight_label  = COALESCE($2, weight_label),
+               price         = COALESCE($3, price),
+               compare_price = $4,
+               stock_qty     = COALESCE($5, stock_qty),
+               is_active     = COALESCE($6, is_active),
+               updated_at    = NOW()
+             WHERE id = $7 AND product_id = $8`,
+            [
+              v.weightGrams !== undefined ? v.weightGrams : null,
+              v.weightLabel || null,
+              v.price !== undefined ? v.price : null,
+              v.comparePrice !== undefined ? v.comparePrice : null,
+              v.stockQty !== undefined ? v.stockQty : null,
+              v.isActive !== undefined ? v.isActive : null,
+              v.id,
+              id
+            ]
+          );
+        } else {
+          // Insert
+          await client.query(
+            `INSERT INTO product_variants
+               (product_id, weight_grams, weight_label, price, compare_price, stock_qty, is_active)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+            [
+              id,
+              v.weightGrams || 0,
+              v.weightLabel,
+              v.price,
+              v.comparePrice || null,
+              v.stockQty || 0,
+              v.isActive !== undefined ? v.isActive : true
+            ]
+          );
+        }
+      }
+    }
+
+    // 3. Sync Images (if provided)
+    if (hasImages) {
+      const currentImgsRes = await client.query(
+        "SELECT id, image_url FROM product_images WHERE product_id = $1", 
+        [id]
+      );
+      const currentImgMap = new Map(currentImgsRes.rows.map(r => [r.id, r]));
+      const incomingImgIds = req.body.images.filter(img => img.id).map(img => img.id);
+
+      // Delete images not in incoming request body
+      const imgsToDelete = currentImgsRes.rows.filter(img => !incomingImgIds.includes(img.id));
+      if (imgsToDelete.length > 0) {
+        const idsToDelete = imgsToDelete.map(img => img.id);
+        await client.query(
+          "DELETE FROM product_images WHERE product_id = $1 AND id = ANY($2)",
+          [id, idsToDelete]
+        );
+        // Delete files from Supabase Storage asynchronously
+        const urlsToDelete = imgsToDelete.map(img => img.image_url);
+        Promise.all(urlsToDelete.map(url => deleteFromSupabase(url))).catch(err => {
+          console.warn(`[Supabase] async delete failed during update of product ${id}: ${err.message}`);
+        });
+      }
+
+      // Upsert incoming images
+      let primaryImageIndex = req.body.images.findIndex(img => img.isPrimary);
+      if (primaryImageIndex === -1 && req.body.images.length > 0) {
+        primaryImageIndex = 0; // default first one to primary
+      }
+
+      for (let idx = 0; idx < req.body.images.length; idx++) {
+        const img = req.body.images[idx];
+        if (!img.imageUrl) continue;
+        const isPrimary = (idx === primaryImageIndex);
+
+        if (img.id && currentImgMap.has(img.id)) {
+          // Update
+          await client.query(
+            `UPDATE product_images SET
+               sort_order = COALESCE($1, sort_order),
+               is_primary = $2
+             WHERE id = $3 AND product_id = $4`,
+            [
+              img.sortOrder !== undefined ? img.sortOrder : null,
+              isPrimary,
+              img.id,
+              id
+            ]
+          );
+        } else {
+          // Insert
+          await client.query(
+            `INSERT INTO product_images (product_id, image_url, sort_order, is_primary)
+             VALUES ($1, $2, $3, $4)`,
+            [
+              id,
+              img.imageUrl,
+              img.sortOrder || 0,
+              isPrimary
+            ]
+          );
+        }
+      }
+    }
+
+    await client.query("COMMIT");
+
+    // Retrieve fresh/updated state
     const { variants, images, reviews } = await fetchVariantsImagesReviews(id);
     console.log({ route: "PUT /api/products/update-product", productId: id, status: 200 });
-    return res.json({ success: true, message: "Product updated", product: formatProduct(result.rows[0], variants, images, reviews) });
+    return res.json({ success: true, message: "Product updated", product: formatProduct(prodUpdateRes.rows[0], variants, images, reviews) });
   } catch (err) {
+    await client.query("ROLLBACK");
     console.error({ route: "PUT /api/products/update-product", productId: id, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
+  } finally {
+    client.release();
   }
 }
 
@@ -400,21 +555,45 @@ async function updateProduct(req, res) {
 // ==================================================================
 async function deleteProduct(req, res) {
   const { id } = req.body;
-  console.log({ route: "DELETE /api/products/delete-product", productId: id, status: "deactivating product" });
+  console.log({ route: "DELETE /api/products/delete-product", productId: id, status: "deactivating product and cleaning up images" });
+  const client = await db.getClient();
   try {
-    const result = await db.query(
+    await client.query("BEGIN");
+
+    const result = await client.query(
       "UPDATE products SET is_active = FALSE, updated_at = NOW() WHERE id = $1 RETURNING id",
       [id]
     );
     if (result.rows.length === 0) {
+      await client.query("ROLLBACK");
       console.log({ route: "DELETE /api/products/delete-product", productId: id, status: 404, message: "Product not found" });
       return res.status(404).json({ success: false, message: "Product not found" });
     }
+
+    // Delete image records from DB and get their URLs
+    const imgRes = await client.query(
+      "DELETE FROM product_images WHERE product_id = $1 RETURNING image_url",
+      [id]
+    );
+
+    await client.query("COMMIT");
+
+    // Asynchronously delete files from Supabase Storage (non-blocking)
+    if (imgRes.rows.length > 0) {
+      const urls = imgRes.rows.map(r => r.image_url);
+      Promise.all(urls.map(url => deleteFromSupabase(url))).catch(err => {
+        console.warn(`[Supabase] async bulk delete failed for product ${id}: ${err.message}`);
+      });
+    }
+
     console.log({ route: "DELETE /api/products/delete-product", productId: id, status: 200 });
-    return res.json({ success: true, message: "Product deactivated (soft delete — order history preserved)" });
+    return res.json({ success: true, message: "Product deactivated (soft delete — order history preserved) and images cleared" });
   } catch (err) {
+    await client.query("ROLLBACK");
     console.error({ route: "DELETE /api/products/delete-product", productId: id, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
+  } finally {
+    client.release();
   }
 }
 
@@ -505,8 +684,24 @@ async function deleteVariant(req, res) {
       return res.status(404).json({ success: false, message: "Variant not found" });
     }
     console.log({ route: "DELETE /api/products/delete-variant", productId: id, variantId, status: 200 });
-    return res.json({ success: true, message: "Variant deleted" });
+    return res.json({ success: true, message: "Variant deleted successfully" });
   } catch (err) {
+    if (err.code === "23503") {
+      console.log({ route: "DELETE /api/products/delete-variant", productId: id, variantId, status: 200, info: "foreign key constraint violation, soft-deactivating variant instead" });
+      try {
+        const softDelRes = await db.query(
+          "UPDATE product_variants SET is_active = FALSE, updated_at = NOW() WHERE id = $1 AND product_id = $2 RETURNING id",
+          [variantId, id]
+        );
+        if (softDelRes.rows.length === 0) {
+          return res.status(404).json({ success: false, message: "Variant not found" });
+        }
+        return res.json({ success: true, message: "Variant cannot be hard deleted due to order history; deactivated instead" });
+      } catch (softErr) {
+        console.error({ route: "DELETE /api/products/delete-variant", productId: id, variantId, status: 500, error: softErr.message });
+        return res.status(500).json({ success: false, message: "Internal server error" });
+      }
+    }
     console.error({ route: "DELETE /api/products/delete-variant", productId: id, variantId, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
@@ -560,7 +755,10 @@ async function deleteImage(req, res) {
     if (result.rows.length === 0) {
       return res.status(404).json({ success: false, message: "Image not found" });
     }
-    await deleteFromSupabase(result.rows[0].image_url);
+    // Delete from Supabase asynchronously to prevent API response delays
+    deleteFromSupabase(result.rows[0].image_url).catch(err => {
+      console.warn(`[Supabase] async delete failed for "${result.rows[0].image_url}": ${err.message}`);
+    });
     console.log({ route: "DELETE /api/products/delete-image", productId: id, imageId, status: 200 });
     return res.json({ success: true, message: "Image deleted" });
   } catch (err) {
