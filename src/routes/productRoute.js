@@ -4,13 +4,14 @@ const {
   getAllProducts, getProductBySlug,
   createProduct, updateProduct, deleteProduct,
   addVariant, updateVariant, deleteVariant,
-  addImage, deleteImage,
+  addImage, addImages, deleteImage,
   addReview, deleteReview,
 } = require("../controllers/productController.js");
 const { authenticate, isAdmin } = require("../middleware/auth.js");
 const { uploadProduct } = require("../controllers/uploadController.js");
 
 const productImageUpload = uploadProduct.single("imageFile");
+const productImagesUpload = uploadProduct.array("imageFiles", 5); // max 5 per request
 
 // Public
 router.get("/get-all",      getAllProducts);
@@ -30,7 +31,8 @@ router.put   ("/update-variant", authenticate, isAdmin, updateVariant);
 router.delete("/delete-variant", authenticate, isAdmin, deleteVariant);
 
 // Admin — images
-router.post  ("/add-image",    authenticate, isAdmin, productImageUpload, addImage);
+router.post  ("/add-image",    authenticate, isAdmin, productImageUpload,  addImage);
+router.post  ("/add-images",   authenticate, isAdmin, productImagesUpload, addImages); // bulk, 3-5 typical
 router.delete("/delete-image", authenticate, isAdmin, deleteImage);
 
 // Admin — reviews

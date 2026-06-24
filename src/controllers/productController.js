@@ -161,7 +161,10 @@ async function getAllProducts(req, res) {
        FROM v_products_with_price v
        WHERE v.is_active = TRUE
          AND ($1::text IS NULL OR v.category_slug = $1)
-         AND ($2::text IS NULL OR v.name_en ILIKE '%' || $2 || '%' OR v.name_ta ILIKE '%' || $2 || '%')
+         AND ($2::text IS NULL OR
+               v.name_en    ILIKE '%' || $2 || '%' OR
+               v.name_ta    ILIKE '%' || $2 || '%' OR
+               v.description ILIKE '%' || $2 || '%')
          AND (NOT $3 OR v.total_stock > 0)
          AND (NOT $4 OR v.is_bestseller = TRUE)
          AND (NOT $5 OR v.is_new = TRUE)`,
@@ -710,14 +713,23 @@ async function deleteVariant(req, res) {
 // ==================================================================
 // ADMIN — POST /api/products/add-image
 // Accepts multipart/form-data (imageFile) OR JSON (imageUrl).
+// Stored under Supabase path: product/{slug}/{filename}
 // ==================================================================
 async function addImage(req, res) {
   let { productId: id, imageUrl, sortOrder, isPrimary } = req.body;
   console.log({ route: "POST /api/products/add-image", productId: id });
 
+  if (!id) {
+    return res.status(400).json({ success: false, message: "productId is required" });
+  }
+
   try {
     if (req.file) {
-      imageUrl = await uploadToSupabase(req.file.buffer, req.file.mimetype, req.file.originalname, "product");
+      const prodRes = await db.query("SELECT slug FROM products WHERE id = $1", [id]);
+      if (prodRes.rows.length === 0) {
+        return res.status(404).json({ success: false, message: "Product not found" });
+      }
+      imageUrl = await uploadToSupabase(req.file.buffer, req.file.mimetype, req.file.originalname, `product/${prodRes.rows[0].slug}`);
     }
 
     if (!imageUrl) {
@@ -736,6 +748,79 @@ async function addImage(req, res) {
     return res.status(201).json({ success: true, message: "Image added", image: formatImage(result.rows[0]) });
   } catch (err) {
     console.error({ route: "POST /api/products/add-image", productId: id, status: 500, error: err.message });
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+}
+
+// ==================================================================
+// ADMIN — POST /api/products/add-images
+// Bulk upload (3-5 typical) in ONE request.
+// Multipart field: imageFiles (array, max 5) — see uploadRoute wiring.
+// Body (multipart fields, all optional): primaryIndex (0-based index
+// into the uploaded files array that should become the primary image)
+// Stored under Supabase path: product/{slug}/{filename}
+// Response: { success, message, images: [...] }
+// ==================================================================
+async function addImages(req, res) {
+  const { productId: id } = req.body;
+  const files = req.files || [];
+  const primaryIndex = req.body.primaryIndex !== undefined ? parseInt(req.body.primaryIndex) : null;
+
+  console.log({ route: "POST /api/products/add-images", productId: id, fileCount: files.length, status: "uploading batch" });
+
+  if (!id) {
+    return res.status(400).json({ success: false, message: "productId is required" });
+  }
+  if (!files.length) {
+    return res.status(400).json({ success: false, message: "At least one imageFile is required" });
+  }
+
+  try {
+    const prodRes = await db.query("SELECT slug FROM products WHERE id = $1", [id]);
+    if (prodRes.rows.length === 0) {
+      return res.status(404).json({ success: false, message: "Product not found" });
+    }
+    const slug = prodRes.rows[0].slug;
+
+    // Check whether the product already has a primary image
+    const existingPrimary = await db.query(
+      "SELECT id FROM product_images WHERE product_id = $1 AND is_primary = TRUE",
+      [id]
+    );
+    let primaryAlreadySet = existingPrimary.rows.length > 0;
+
+    // Current max sort_order so new images append after existing ones
+    const maxSortRes = await db.query(
+      "SELECT COALESCE(MAX(sort_order), -1) AS max_sort FROM product_images WHERE product_id = $1",
+      [id]
+    );
+    let nextSort = parseInt(maxSortRes.rows[0].max_sort) + 1;
+
+    // Upload all files to Supabase in parallel: product/{slug}/{filename}
+    const uploadedUrls = await Promise.all(
+      files.map(f => uploadToSupabase(f.buffer, f.mimetype, f.originalname, `product/${slug}`))
+    );
+
+    const insertedImages = [];
+    for (let idx = 0; idx < uploadedUrls.length; idx++) {
+      const shouldBePrimary = !primaryAlreadySet && (
+        primaryIndex !== null ? idx === primaryIndex : idx === 0
+      );
+      if (shouldBePrimary) primaryAlreadySet = true;
+
+      const result = await db.query(
+        `INSERT INTO product_images (product_id, image_url, sort_order, is_primary)
+         VALUES ($1,$2,$3,$4) RETURNING *`,
+        [id, uploadedUrls[idx], nextSort, shouldBePrimary]
+      );
+      insertedImages.push(formatImage(result.rows[0]));
+      nextSort += 1;
+    }
+
+    console.log({ route: "POST /api/products/add-images", productId: id, status: 201, count: insertedImages.length });
+    return res.status(201).json({ success: true, message: `${insertedImages.length} image(s) added`, images: insertedImages });
+  } catch (err) {
+    console.error({ route: "POST /api/products/add-images", productId: id, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -841,6 +926,6 @@ module.exports = {
   getAllProducts, getProductBySlug,
   createProduct, updateProduct, deleteProduct,
   addVariant, updateVariant, deleteVariant,
-  addImage, deleteImage,
+  addImage, addImages, deleteImage,
   addReview, deleteReview
 };

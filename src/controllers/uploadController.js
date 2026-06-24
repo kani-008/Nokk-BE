@@ -55,19 +55,26 @@ async function uploadBannerFile(req, res) {
 
 // ==================================================================
 // ADMIN — POST /api/upload/product
-// Multipart field: file (JPEG/PNG/WebP, max 5 MB)
+// Multipart fields: file (JPEG/PNG/WebP, max 5 MB), slug (required)
+// Files are stored under product/{slug}/... so each product gets its
+// own folder in Supabase Storage.
 // Response: { success, url }
 // ==================================================================
 async function uploadProductImage(req, res) {
   const { file } = req;
+  const slug = (req.body.slug || "").trim();
+
   if (!file) {
     return res.status(400).json({ success: false, message: "No file provided" });
   }
+  if (!slug) {
+    return res.status(400).json({ success: false, message: "slug is required to know which product folder to upload into" });
+  }
 
-  console.log({ route: "POST /api/upload/product", file: file.originalname, size: file.size });
+  console.log({ route: "POST /api/upload/product", slug, file: file.originalname, size: file.size });
 
   try {
-    const url = await uploadToSupabase(file.buffer, file.mimetype, file.originalname, "product");
+    const url = await uploadToSupabase(file.buffer, file.mimetype, file.originalname, `product/${slug}`);
     console.log({ route: "POST /api/upload/product", status: 200, url });
     return res.status(200).json({ success: true, url });
   } catch (err) {
