@@ -171,6 +171,21 @@ async function getAllProducts(req, res) {
     );
 
     log({ route: "GET /api/products", status: 200, count: result.rows.length });
+
+    let variantsByProduct = {};
+    if (result.rows.length > 0) {
+      const productIds = result.rows.map(r => r.id);
+      const varRes = await db.query(
+        `SELECT * FROM product_variants WHERE product_id = ANY($1) AND is_active = TRUE ORDER BY weight_grams ASC`,
+        [productIds]
+      );
+      varRes.rows.forEach(v => {
+        const pid = v.product_id;
+        if (!variantsByProduct[pid]) variantsByProduct[pid] = [];
+        variantsByProduct[pid].push(formatVariant(v));
+      });
+    }
+
     return res.json({
       success: true,
       pagination: {
@@ -178,7 +193,7 @@ async function getAllProducts(req, res) {
         total: parseInt(countRes.rows[0].total),
         totalPages: Math.ceil(parseInt(countRes.rows[0].total) / limit)
       },
-      products: result.rows.map(p => formatProduct(p))
+      products: result.rows.map(p => formatProduct(p, variantsByProduct[p.id] || []))
     });
   } catch (err) {
     lerr({ route: "GET /api/products", status: 500, error: err.message });

@@ -23,6 +23,7 @@ const inventoryRoute = require("./src/routes/inventoryRoute.js");
 const settingsRoute = require("./src/routes/settingsRoute.js");
 const dashboardRoute = require("./src/routes/dashboardRoute.js");
 const reportRoute = require("./src/routes/reportRoute.js");
+const uploadRoute = require("./src/routes/uploadRoute.js");
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -51,14 +52,15 @@ app.use("/api/categories", categoryRoute); // public list | CRUD (admin)
 app.use("/api/products", productRoute); // public list | CRUD + variants + images (admin)
 app.use("/api/cart", cartRoute); // add, update, remove, clear (login required)
 app.use("/api/wishlist", wishlistRoute); // add, remove, clear (login required)
-app.use("/api/banners", bannerRoute); // public active | CRUD (admin)
-app.use("/api/btext", btextRoute); // public active by banner | CRUD (admin)
-app.use("/api/coupons", couponRoute); // validate (customer) | CRUD (admin)
-app.use("/api/offers", offersRoute); // public live | CRUD (admin)
+app.use("/api/banners",   bannerRoute);    // public active | CRUD (admin)
+app.use("/api/btext",     btextRoute);     // public active by banner | CRUD (admin)
+app.use("/api/coupons",   couponRoute);    // validate (customer) | CRUD (admin)
+app.use("/api/offers",    offersRoute);    // public live | CRUD (admin)
 app.use("/api/inventory", inventoryRoute); // stock management (admin only)
-app.use("/api/settings", settingsRoute); // public read | write (admin)
+app.use("/api/settings",  settingsRoute);  // public read | write (admin)
 app.use("/api/dashboard", dashboardRoute); // KPIs, reports, charts (admin only)
-app.use("/api/reports", reportRoute); // exportable reports (admin only)
+app.use("/api/reports",   reportRoute);    // exportable reports (admin only)
+app.use("/api/upload",    uploadRoute);    // file upload to Supabase Storage (admin only)
 
 // ── 404 ───────────────────────────────────────────────────────────
 app.use((req, res) => {
