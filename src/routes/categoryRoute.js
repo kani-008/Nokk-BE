@@ -1,23 +1,15 @@
 const express = require("express");
-const router = express.Router();
+const router  = express.Router();
+const { getAllCategories, getCategoryBySlug, createCategory, updateCategory, deleteCategory } = require("../controllers/categoryController.js");
+const { authenticate, isAdmin } = require("../middleware/auth.js");
+const { uploadProduct } = require("../controllers/uploadController.js");
 
-const {
-  getAllCategories,
-  getCategoryBySlug,
-  createCategory,
-  updateCategory,
-  deleteCategory,
-} = require("../controllers/categoryController.js");
+const categoryUpload = uploadProduct.single("imageFile");
 
-const authenticate = require("../middleware/auth.js");
-const { isAdmin } = require("../middleware/auth.js");
+router.get   ("/get-all",          getAllCategories);
+router.get   ("/get-by-slug",      getCategoryBySlug);
+router.post  ("/create-category",  authenticate, isAdmin, categoryUpload, createCategory);
+router.put   ("/update-category",  authenticate, isAdmin, categoryUpload, updateCategory);
+router.delete("/delete-category",  authenticate, isAdmin, deleteCategory);
 
-// Public
-router.get("/get-all", getAllCategories); // all active categories
-router.get("/get-by-slug", getCategoryBySlug); // ?slug=  (category + products)
-
-// Admin
-router.post("/create-category", authenticate, isAdmin, createCategory);
-router.put("/update-category", authenticate, isAdmin, updateCategory); // id -> body
-router.delete("/delete-category", authenticate, isAdmin, deleteCategory); // id -> body
 module.exports = router;

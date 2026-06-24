@@ -516,24 +516,24 @@ async function deleteVariant(req, res) {
 }
 
 // ==================================================================
-// ADMIN — POST /api/products/:id/images
-// Add image(s) to a product.
+// ADMIN — POST /api/products/add-image
+// Accepts multipart/form-data (imageFile) OR JSON (imageUrl).
 // ==================================================================
 async function addImage(req, res) {
-  const { productId: id, imageUrl, sortOrder, isPrimary } = req.body;
-  log({ route: "POST /api/products/add-image", productId: id, body: { imageUrl, sortOrder, isPrimary }, status: "adding image" });
+  let { productId: id, imageUrl, sortOrder, isPrimary } = req.body;
+  log({ route: "POST /api/products/add-image", productId: id });
 
-  if (!imageUrl) {
-    log({ route: "POST /api/products/add-image", productId: id, status: 400, message: "imageUrl is required" });
-    return res.status(400).json({ success: false, message: "imageUrl is required" });
-  }
   try {
-    // If marking as primary, clear current primary first
+    if (req.file) {
+      imageUrl = await uploadToSupabase(req.file.buffer, req.file.mimetype, req.file.originalname, "product");
+    }
+
+    if (!imageUrl) {
+      return res.status(400).json({ success: false, message: "imageUrl or imageFile is required" });
+    }
+
     if (isPrimary) {
-      await db.query(
-        "UPDATE product_images SET is_primary = FALSE WHERE product_id = $1",
-        [id]
-      );
+      await db.query("UPDATE product_images SET is_primary = FALSE WHERE product_id = $1", [id]);
     }
     const result = await db.query(
       `INSERT INTO product_images (product_id, image_url, sort_order, is_primary)
@@ -549,20 +549,21 @@ async function addImage(req, res) {
 }
 
 // ==================================================================
-// ADMIN — DELETE /api/products/:id/images/:imageId
+// ADMIN — DELETE /api/products/delete-image
+// Removes DB record and deletes the file from Supabase storage.
 // ==================================================================
 async function deleteImage(req, res) {
   const { productId: id, imageId } = req.body;
-  log({ route: "DELETE /api/products/delete-image", productId: id, imageId, status: "deleting image" });
+  log({ route: "DELETE /api/products/delete-image", productId: id, imageId });
   try {
     const result = await db.query(
-      "DELETE FROM product_images WHERE id = $1 AND product_id = $2 RETURNING id",
+      "DELETE FROM product_images WHERE id = $1 AND product_id = $2 RETURNING image_url",
       [imageId, id]
     );
     if (result.rows.length === 0) {
-      log({ route: "DELETE /api/products/delete-image", productId: id, imageId, status: 404, message: "Image not found" });
       return res.status(404).json({ success: false, message: "Image not found" });
     }
+    await deleteFromSupabase(result.rows[0].image_url);
     log({ route: "DELETE /api/products/delete-image", productId: id, imageId, status: 200 });
     return res.json({ success: true, message: "Image deleted" });
   } catch (err) {
