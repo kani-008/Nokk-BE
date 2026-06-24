@@ -1,8 +1,5 @@
 const db = require("../config/db.js");
 
-const log = (data) => console.log(data);
-const lerr = (data) => console.error(data);
-
 // Schema columns: id, code, discount_percent, discount_flat, free_shipping,
 //                 min_order, max_uses, expiry_date, usage_count,
 //                 description, is_active, created_at, updated_at
@@ -35,10 +32,10 @@ function formatCoupon(c) {
 async function validateCoupon(req, res) {
   const code = req.body.code ? String(req.body.code).trim().toUpperCase() : "";
   const subtotal = parseFloat(req.body.subtotal) || 0;
-  log({ route: "POST /api/coupons/validate", body: { code, subtotal }, status: "validating coupon" });
+  console.log({ route: "POST /api/coupons/validate", body: { code, subtotal }, status: "validating coupon" });
 
   if (!code) {
-    log({ route: "POST /api/coupons/validate", status: 400, message: "Coupon code is required" });
+    console.log({ route: "POST /api/coupons/validate", status: 400, message: "Coupon code is required" });
     return res.status(400).json({ success: false, message: "Coupon code is required" });
   }
 
@@ -48,7 +45,7 @@ async function validateCoupon(req, res) {
     );
 
     if (result.rows.length === 0) {
-      log({ route: "POST /api/coupons/validate", code, status: 404, message: "Invalid coupon code" });
+      console.log({ route: "POST /api/coupons/validate", code, status: 404, message: "Invalid coupon code" });
       return res.status(404).json({ success: false, message: "Invalid coupon code" });
     }
 
@@ -56,19 +53,19 @@ async function validateCoupon(req, res) {
 
     // Expiry check
     if (c.expiry_date && new Date(c.expiry_date) < new Date()) {
-      log({ route: "POST /api/coupons/validate", code, status: 400, message: "Coupon expired" });
+      console.log({ route: "POST /api/coupons/validate", code, status: 400, message: "Coupon expired" });
       return res.status(400).json({ success: false, message: "This coupon has expired" });
     }
 
     // Usage limit check
     if (c.max_uses !== null && parseInt(c.usage_count) >= c.max_uses) {
-      log({ route: "POST /api/coupons/validate", code, status: 400, message: "Coupon usage limit reached" });
+      console.log({ route: "POST /api/coupons/validate", code, status: 400, message: "Coupon usage limit reached" });
       return res.status(400).json({ success: false, message: "This coupon has reached its usage limit" });
     }
 
     // Minimum order check
     if (subtotal < parseFloat(c.min_order)) {
-      log({ route: "POST /api/coupons/validate", code, status: 400, message: "min order not met" });
+      console.log({ route: "POST /api/coupons/validate", code, status: 400, message: "min order not met" });
       return res.status(400).json({
         success: false,
         message: `Minimum order of ₹${c.min_order} required for this coupon`
@@ -84,7 +81,7 @@ async function validateCoupon(req, res) {
     }
     discountAmount = Math.min(discountAmount, subtotal); // never exceed subtotal
 
-    log({ route: "POST /api/coupons/validate", code, status: 200, discountAmount });
+    console.log({ route: "POST /api/coupons/validate", code, status: 200, discountAmount });
     return res.json({
       success: true,
       message: "Coupon applied successfully",
@@ -93,7 +90,7 @@ async function validateCoupon(req, res) {
       freeShipping: c.free_shipping
     });
   } catch (err) {
-    lerr({ route: "POST /api/coupons/validate", code, status: 500, error: err.message });
+    console.error({ route: "POST /api/coupons/validate", code, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -103,15 +100,15 @@ async function validateCoupon(req, res) {
 // All coupons with active/expired/exhausted flags.
 // ==================================================================
 async function getAllCoupons(req, res) {
-  log({ route: "GET /api/coupons", status: "fetching all coupons" });
+  console.log({ route: "GET /api/coupons", status: "fetching all coupons" });
   try {
     const result = await db.query(
       `SELECT * FROM coupons ORDER BY created_at DESC`
     );
-    log({ route: "GET /api/coupons", status: 200, count: result.rows.length });
+    console.log({ route: "GET /api/coupons", status: 200, count: result.rows.length });
     return res.json({ success: true, coupons: result.rows.map(formatCoupon) });
   } catch (err) {
-    lerr({ route: "GET /api/coupons", status: 500, error: err.message });
+    console.error({ route: "GET /api/coupons", status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -126,10 +123,10 @@ async function createCoupon(req, res) {
     code, discountPercent, discountFlat, freeShipping,
     minOrder, maxUses, expiryDate, description, isActive
   } = req.body;
-  log({ route: "POST /api/coupons", body: { code, discountPercent, discountFlat, freeShipping, minOrder, maxUses, expiryDate, isActive }, status: "creating coupon" });
+  console.log({ route: "POST /api/coupons", body: { code, discountPercent, discountFlat, freeShipping, minOrder, maxUses, expiryDate, isActive }, status: "creating coupon" });
 
   if (!code) {
-    log({ route: "POST /api/coupons", status: 400, message: "code is required" });
+    console.log({ route: "POST /api/coupons", status: 400, message: "code is required" });
     return res.status(400).json({ success: false, message: "code is required" });
   }
 
@@ -138,7 +135,7 @@ async function createCoupon(req, res) {
   try {
     const dup = await db.query("SELECT id FROM coupons WHERE code = $1", [upperCode]);
     if (dup.rows.length > 0) {
-      log({ route: "POST /api/coupons", code: upperCode, status: 409, message: "coupon code already exists" });
+      console.log({ route: "POST /api/coupons", code: upperCode, status: 409, message: "coupon code already exists" });
       return res.status(409).json({ success: false, message: "Coupon code already exists" });
     }
 
@@ -160,10 +157,10 @@ async function createCoupon(req, res) {
         isActive ?? true
       ]
     );
-    log({ route: "POST /api/coupons", code: upperCode, status: 201, couponId: result.rows[0].id });
+    console.log({ route: "POST /api/coupons", code: upperCode, status: 201, couponId: result.rows[0].id });
     return res.status(201).json({ success: true, message: "Coupon created", coupon: formatCoupon(result.rows[0]) });
   } catch (err) {
-    lerr({ route: "POST /api/coupons", status: 500, error: err.message });
+    console.error({ route: "POST /api/coupons", status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -176,7 +173,7 @@ async function updateCoupon(req, res) {
     id, discountPercent, discountFlat, freeShipping,
     minOrder, maxUses, expiryDate, description, isActive
   } = req.body;
-  log({ route: "PUT /api/coupons/update-coupon", couponId: id, body: { discountPercent, discountFlat, freeShipping, minOrder, maxUses, expiryDate, isActive }, status: "updating coupon" });
+  console.log({ route: "PUT /api/coupons/update-coupon", couponId: id, body: { discountPercent, discountFlat, freeShipping, minOrder, maxUses, expiryDate, isActive }, status: "updating coupon" });
 
   try {
     const result = await db.query(
@@ -205,13 +202,13 @@ async function updateCoupon(req, res) {
       ]
     );
     if (result.rows.length === 0) {
-      log({ route: "PUT /api/coupons/update-coupon", couponId: id, status: 404, message: "Coupon not found" });
+      console.log({ route: "PUT /api/coupons/update-coupon", couponId: id, status: 404, message: "Coupon not found" });
       return res.status(404).json({ success: false, message: "Coupon not found" });
     }
-    log({ route: "PUT /api/coupons/update-coupon", couponId: id, status: 200 });
+    console.log({ route: "PUT /api/coupons/update-coupon", couponId: id, status: 200 });
     return res.json({ success: true, message: "Coupon updated", coupon: formatCoupon(result.rows[0]) });
   } catch (err) {
-    lerr({ route: "PUT /api/coupons/update-coupon", couponId: id, status: 500, error: err.message });
+    console.error({ route: "PUT /api/coupons/update-coupon", couponId: id, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -221,19 +218,19 @@ async function updateCoupon(req, res) {
 // ==================================================================
 async function deleteCoupon(req, res) {
   const { id } = req.body;
-  log({ route: "DELETE /api/coupons/delete-coupon", couponId: id, status: "deleting coupon" });
+  console.log({ route: "DELETE /api/coupons/delete-coupon", couponId: id, status: "deleting coupon" });
   try {
     const result = await db.query(
       "DELETE FROM coupons WHERE id = $1 RETURNING id", [id]
     );
     if (result.rows.length === 0) {
-      log({ route: "DELETE /api/coupons/delete-coupon", couponId: id, status: 404, message: "Coupon not found" });
+      console.log({ route: "DELETE /api/coupons/delete-coupon", couponId: id, status: 404, message: "Coupon not found" });
       return res.status(404).json({ success: false, message: "Coupon not found" });
     }
-    log({ route: "DELETE /api/coupons/delete-coupon", couponId: id, status: 200 });
+    console.log({ route: "DELETE /api/coupons/delete-coupon", couponId: id, status: 200 });
     return res.json({ success: true, message: "Coupon deleted" });
   } catch (err) {
-    lerr({ route: "DELETE /api/coupons/delete-coupon", couponId: id, status: 500, error: err.message });
+    console.error({ route: "DELETE /api/coupons/delete-coupon", couponId: id, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }

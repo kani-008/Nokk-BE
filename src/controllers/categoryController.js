@@ -1,9 +1,6 @@
 const db = require("../config/db.js");
 const { uploadToSupabase, deleteFromSupabase } = require("../config/supabase.js");
 
-const log  = (data) => console.log(data);
-const lerr = (data) => console.error(data);
-
 // Shape for every category response — every column included
 function formatCategory(c) {
   return {
@@ -28,15 +25,15 @@ function formatCategory(c) {
 // Used by: Products page sidebar, Home page, Checkout filters.
 // ==================================================================
 async function getAllCategories(req, res) {
-  log({ route: "GET /api/categories", status: "fetching active categories" });
+  console.log({ route: "GET /api/categories", status: "fetching active categories" });
   try {
     const result = await db.query(
       `SELECT * FROM categories WHERE is_active = TRUE ORDER BY sort_order ASC, name_en ASC`
     );
-    log({ route: "GET /api/categories", status: 200, count: result.rows.length });
+    console.log({ route: "GET /api/categories", status: 200, count: result.rows.length });
     return res.json({ success: true, categories: result.rows.map(formatCategory) });
   } catch (err) {
-    lerr({ route: "GET /api/categories", status: 500, error: err.message });
+    console.error({ route: "GET /api/categories", status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -48,14 +45,14 @@ async function getAllCategories(req, res) {
 // ==================================================================
 async function getCategoryBySlug(req, res) {
   const { slug } = req.query;
-  log({ route: "GET /api/categories/get-by-slug", slug, status: "fetching category by slug" });
+  console.log({ route: "GET /api/categories/get-by-slug", slug, status: "fetching category by slug" });
   try {
     const catRes = await db.query(
       `SELECT * FROM categories WHERE slug = $1 AND is_active = TRUE`,
       [slug]
     );
     if (catRes.rows.length === 0) {
-      log({ route: "GET /api/categories/get-by-slug", slug, status: 404, message: "Category not found" });
+      console.log({ route: "GET /api/categories/get-by-slug", slug, status: 404, message: "Category not found" });
       return res.status(404).json({ success: false, message: "Category not found" });
     }
 
@@ -74,7 +71,7 @@ async function getCategoryBySlug(req, res) {
       [catRes.rows[0].id]
     );
 
-    log({ route: "GET /api/categories/get-by-slug", slug, status: 200, productCount: productRes.rows.length });
+    console.log({ route: "GET /api/categories/get-by-slug", slug, status: 200, productCount: productRes.rows.length });
     return res.json({
       success: true,
       category: formatCategory(catRes.rows[0]),
@@ -94,7 +91,7 @@ async function getCategoryBySlug(req, res) {
       }))
     });
   } catch (err) {
-    lerr({ route: "GET /api/categories/get-by-slug", slug, status: 500, error: err.message });
+    console.error({ route: "GET /api/categories/get-by-slug", slug, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -106,7 +103,7 @@ async function getCategoryBySlug(req, res) {
 // ==================================================================
 async function createCategory(req, res) {
   let { nameEn, nameTa, slug, description, imageUrl, sortOrder, isActive } = req.body;
-  log({ route: "POST /api/categories", body: { nameEn, nameTa, slug }, status: "creating category" });
+  console.log({ route: "POST /api/categories", body: { nameEn, nameTa, slug }, status: "creating category" });
 
   try {
     if (req.file) {
@@ -136,10 +133,10 @@ async function createCategory(req, res) {
         isActive ?? true
       ]
     );
-    log({ route: "POST /api/categories", status: 201, categoryId: result.rows[0].id });
+    console.log({ route: "POST /api/categories", status: 201, categoryId: result.rows[0].id });
     return res.status(201).json({ success: true, message: "Category created", category: formatCategory(result.rows[0]) });
   } catch (err) {
-    lerr({ route: "POST /api/categories", status: 500, error: err.message });
+    console.error({ route: "POST /api/categories", status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -150,7 +147,7 @@ async function createCategory(req, res) {
 // ==================================================================
 async function updateCategory(req, res) {
   let { id, nameEn, nameTa, slug, description, imageUrl, sortOrder, isActive } = req.body;
-  log({ route: "PUT /api/categories/update-category", categoryId: id });
+  console.log({ route: "PUT /api/categories/update-category", categoryId: id });
 
   try {
     const existing = await db.query("SELECT id, image_url FROM categories WHERE id = $1", [id]);
@@ -201,10 +198,10 @@ async function updateCategory(req, res) {
       await deleteFromSupabase(oldImageUrl);
     }
 
-    log({ route: "PUT /api/categories/update-category", categoryId: id, status: 200 });
+    console.log({ route: "PUT /api/categories/update-category", categoryId: id, status: 200 });
     return res.json({ success: true, message: "Category updated", category: formatCategory(result.rows[0]) });
   } catch (err) {
-    lerr({ route: "PUT /api/categories/update-category", categoryId: id, status: 500, error: err.message });
+    console.error({ route: "PUT /api/categories/update-category", categoryId: id, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -215,7 +212,7 @@ async function updateCategory(req, res) {
 // ==================================================================
 async function deleteCategory(req, res) {
   const { id } = req.body;
-  log({ route: "DELETE /api/categories/delete-category", categoryId: id });
+  console.log({ route: "DELETE /api/categories/delete-category", categoryId: id });
   try {
     const inUse = await db.query(
       "SELECT COUNT(*) AS c FROM products WHERE category_id = $1 AND is_active = TRUE",
@@ -234,10 +231,10 @@ async function deleteCategory(req, res) {
       return res.status(404).json({ success: false, message: "Category not found" });
     }
     await deleteFromSupabase(result.rows[0].image_url);
-    log({ route: "DELETE /api/categories/delete-category", categoryId: id, status: 200 });
+    console.log({ route: "DELETE /api/categories/delete-category", categoryId: id, status: 200 });
     return res.json({ success: true, message: "Category deleted" });
   } catch (err) {
-    lerr({ route: "DELETE /api/categories/delete-category", categoryId: id, status: 500, error: err.message });
+    console.error({ route: "DELETE /api/categories/delete-category", categoryId: id, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }

@@ -1,9 +1,6 @@
 const db = require("../config/db.js");
 const { uploadToSupabase, deleteFromSupabase } = require("../config/supabase.js");
 
-const log  = (data) => console.log(data);
-const lerr = (data) => console.error(data);
-
 // ------------------------------------------------------------------
 // Helpers
 // ------------------------------------------------------------------
@@ -131,7 +128,7 @@ async function getAllProducts(req, res) {
   const inStock = req.query.inStock === "true";
   const isBest = req.query.isBestseller === "true";
   const isNew = req.query.isNew === "true";
-  log({ route: "GET /api/products", query: { page, limit, search, category: catSlug, inStock, isBestseller: isBest, isNew }, status: "fetching products" });
+  console.log({ route: "GET /api/products", query: { page, limit, search, category: catSlug, inStock, isBestseller: isBest, isNew }, status: "fetching products" });
 
   const sortMap = {
     "popular": "avg_rating DESC, review_count DESC",
@@ -171,7 +168,7 @@ async function getAllProducts(req, res) {
       [catSlug, search, inStock, isBest, isNew]
     );
 
-    log({ route: "GET /api/products", status: 200, count: result.rows.length });
+    console.log({ route: "GET /api/products", status: 200, count: result.rows.length });
 
     let variantsByProduct = {};
     if (result.rows.length > 0) {
@@ -197,7 +194,7 @@ async function getAllProducts(req, res) {
       products: result.rows.map(p => formatProduct(p, variantsByProduct[p.id] || []))
     });
   } catch (err) {
-    lerr({ route: "GET /api/products", status: 500, error: err.message });
+    console.error({ route: "GET /api/products", status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -209,21 +206,21 @@ async function getAllProducts(req, res) {
 // ==================================================================
 async function getProductBySlug(req, res) {
   const { slug } = req.query;
-  log({ route: "GET /api/products/get-by-slug", slug, status: "fetching product by slug" });
+  console.log({ route: "GET /api/products/get-by-slug", slug, status: "fetching product by slug" });
   try {
     const result = await db.query(
       `SELECT v.* FROM v_products_with_price v WHERE v.slug = $1 AND v.is_active = TRUE`,
       [slug]
     );
     if (result.rows.length === 0) {
-      log({ route: "GET /api/products/get-by-slug", slug, status: 404, message: "Product not found" });
+      console.log({ route: "GET /api/products/get-by-slug", slug, status: 404, message: "Product not found" });
       return res.status(404).json({ success: false, message: "Product not found" });
     }
     const { variants, images, reviews } = await fetchVariantsImagesReviews(result.rows[0].id);
-    log({ route: "GET /api/products/get-by-slug", slug, status: 200 });
+    console.log({ route: "GET /api/products/get-by-slug", slug, status: 200 });
     return res.json({ success: true, product: formatProduct(result.rows[0], variants, images, reviews) });
   } catch (err) {
-    lerr({ route: "GET /api/products/get-by-slug", slug, status: 500, error: err.message });
+    console.error({ route: "GET /api/products/get-by-slug", slug, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -242,14 +239,14 @@ async function createProduct(req, res) {
     storageTips, categoryId, isBestseller, isNew,
     variants = [], images = []
   } = req.body;
-  log({ route: "POST /api/products", body: { nameEn, nameTa, slug, categoryId, isBestseller, isNew, variantsCount: variants?.length, imagesCount: images?.length }, status: "creating product" });
+  console.log({ route: "POST /api/products", body: { nameEn, nameTa, slug, categoryId, isBestseller, isNew, variantsCount: variants?.length, imagesCount: images?.length }, status: "creating product" });
 
   if (!nameEn) {
-    log({ route: "POST /api/products", status: 400, message: "nameEn is required" });
+    console.log({ route: "POST /api/products", status: 400, message: "nameEn is required" });
     return res.status(400).json({ success: false, message: "nameEn is required" });
   }
   if (!variants.length) {
-    log({ route: "POST /api/products", status: 400, message: "variants are required" });
+    console.log({ route: "POST /api/products", status: 400, message: "variants are required" });
     return res.status(400).json({ success: false, message: "At least one variant is required" });
   }
 
@@ -315,15 +312,15 @@ async function createProduct(req, res) {
     await client.query("COMMIT");
 
     const { variants: v, images: i, reviews: r } = await fetchVariantsImagesReviews(product.id);
-    log({ route: "POST /api/products", status: 201, productId: product.id });
+    console.log({ route: "POST /api/products", status: 201, productId: product.id });
     return res.status(201).json({ success: true, message: "Product created", product: formatProduct(product, v, i, r) });
   } catch (err) {
     await client.query("ROLLBACK");
     if (err.status) {
-      log({ route: "POST /api/products", status: err.status, message: err.message });
+      console.log({ route: "POST /api/products", status: err.status, message: err.message });
       return res.status(err.status).json({ success: false, message: err.message });
     }
-    lerr({ route: "POST /api/products", status: 500, error: err.message });
+    console.error({ route: "POST /api/products", status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   } finally {
     client.release();
@@ -339,12 +336,12 @@ async function updateProduct(req, res) {
     id, nameEn, nameTa, slug, description, howToUse,
     storageTips, categoryId, isBestseller, isNew, isActive
   } = req.body;
-  log({ route: "PUT /api/products/update-product", productId: id, body: { nameEn, nameTa, slug, categoryId, isBestseller, isNew, isActive }, status: "updating product" });
+  console.log({ route: "PUT /api/products/update-product", productId: id, body: { nameEn, nameTa, slug, categoryId, isBestseller, isNew, isActive }, status: "updating product" });
 
   try {
     const existing = await db.query("SELECT id FROM products WHERE id = $1", [id]);
     if (existing.rows.length === 0) {
-      log({ route: "PUT /api/products/update-product", productId: id, status: 404, message: "Product not found" });
+      console.log({ route: "PUT /api/products/update-product", productId: id, status: 404, message: "Product not found" });
       return res.status(404).json({ success: false, message: "Product not found" });
     }
 
@@ -354,7 +351,7 @@ async function updateProduct(req, res) {
         [slug.trim(), id]
       );
       if (dup.rows.length > 0) {
-        log({ route: "PUT /api/products/update-product", productId: id, status: 409, message: "slug already exists" });
+        console.log({ route: "PUT /api/products/update-product", productId: id, status: 409, message: "slug already exists" });
         return res.status(409).json({ success: false, message: "Slug already used by another product" });
       }
     }
@@ -389,10 +386,10 @@ async function updateProduct(req, res) {
       ]
     );
     const { variants, images, reviews } = await fetchVariantsImagesReviews(id);
-    log({ route: "PUT /api/products/update-product", productId: id, status: 200 });
+    console.log({ route: "PUT /api/products/update-product", productId: id, status: 200 });
     return res.json({ success: true, message: "Product updated", product: formatProduct(result.rows[0], variants, images, reviews) });
   } catch (err) {
-    lerr({ route: "PUT /api/products/update-product", productId: id, status: 500, error: err.message });
+    console.error({ route: "PUT /api/products/update-product", productId: id, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -403,20 +400,20 @@ async function updateProduct(req, res) {
 // ==================================================================
 async function deleteProduct(req, res) {
   const { id } = req.body;
-  log({ route: "DELETE /api/products/delete-product", productId: id, status: "deactivating product" });
+  console.log({ route: "DELETE /api/products/delete-product", productId: id, status: "deactivating product" });
   try {
     const result = await db.query(
       "UPDATE products SET is_active = FALSE, updated_at = NOW() WHERE id = $1 RETURNING id",
       [id]
     );
     if (result.rows.length === 0) {
-      log({ route: "DELETE /api/products/delete-product", productId: id, status: 404, message: "Product not found" });
+      console.log({ route: "DELETE /api/products/delete-product", productId: id, status: 404, message: "Product not found" });
       return res.status(404).json({ success: false, message: "Product not found" });
     }
-    log({ route: "DELETE /api/products/delete-product", productId: id, status: 200 });
+    console.log({ route: "DELETE /api/products/delete-product", productId: id, status: 200 });
     return res.json({ success: true, message: "Product deactivated (soft delete — order history preserved)" });
   } catch (err) {
-    lerr({ route: "DELETE /api/products/delete-product", productId: id, status: 500, error: err.message });
+    console.error({ route: "DELETE /api/products/delete-product", productId: id, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -427,10 +424,10 @@ async function deleteProduct(req, res) {
 // ==================================================================
 async function addVariant(req, res) {
   const { productId: id, weightGrams, weightLabel, price, comparePrice, stockQty } = req.body;
-  log({ route: "POST /api/products/add-variant", productId: id, body: { weightGrams, weightLabel, price, comparePrice, stockQty }, status: "adding variant" });
+  console.log({ route: "POST /api/products/add-variant", productId: id, body: { weightGrams, weightLabel, price, comparePrice, stockQty }, status: "adding variant" });
 
   if (!weightLabel || !price) {
-    log({ route: "POST /api/products/add-variant", productId: id, status: 400, message: "missing fields" });
+    console.log({ route: "POST /api/products/add-variant", productId: id, status: 400, message: "missing fields" });
     return res.status(400).json({ success: false, message: "weightLabel and price are required" });
   }
   try {
@@ -441,10 +438,10 @@ async function addVariant(req, res) {
        RETURNING *`,
       [id, weightGrams || 0, weightLabel, price, comparePrice || null, stockQty || 0]
     );
-    log({ route: "POST /api/products/add-variant", productId: id, status: 201, variantId: result.rows[0].id });
+    console.log({ route: "POST /api/products/add-variant", productId: id, status: 201, variantId: result.rows[0].id });
     return res.status(201).json({ success: true, message: "Variant added", variant: formatVariant(result.rows[0]) });
   } catch (err) {
-    lerr({ route: "POST /api/products/add-variant", productId: id, status: 500, error: err.message });
+    console.error({ route: "POST /api/products/add-variant", productId: id, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -455,7 +452,7 @@ async function addVariant(req, res) {
 // ==================================================================
 async function updateVariant(req, res) {
   const { productId: id, variantId, weightGrams, weightLabel, price, comparePrice, stockQty, isActive } = req.body;
-  log({ route: "PUT /api/products/update-variant", productId: id, variantId, body: { weightGrams, weightLabel, price, comparePrice, stockQty, isActive }, status: "updating variant" });
+  console.log({ route: "PUT /api/products/update-variant", productId: id, variantId, body: { weightGrams, weightLabel, price, comparePrice, stockQty, isActive }, status: "updating variant" });
 
   try {
     const result = await db.query(
@@ -481,13 +478,13 @@ async function updateVariant(req, res) {
       ]
     );
     if (result.rows.length === 0) {
-      log({ route: "PUT /api/products/update-variant", productId: id, variantId, status: 404, message: "Variant not found" });
+      console.log({ route: "PUT /api/products/update-variant", productId: id, variantId, status: 404, message: "Variant not found" });
       return res.status(404).json({ success: false, message: "Variant not found" });
     }
-    log({ route: "PUT /api/products/update-variant", productId: id, variantId, status: 200 });
+    console.log({ route: "PUT /api/products/update-variant", productId: id, variantId, status: 200 });
     return res.json({ success: true, message: "Variant updated", variant: formatVariant(result.rows[0]) });
   } catch (err) {
-    lerr({ route: "PUT /api/products/update-variant", productId: id, variantId, status: 500, error: err.message });
+    console.error({ route: "PUT /api/products/update-variant", productId: id, variantId, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -497,20 +494,20 @@ async function updateVariant(req, res) {
 // ==================================================================
 async function deleteVariant(req, res) {
   const { productId: id, variantId } = req.body;
-  log({ route: "DELETE /api/products/delete-variant", productId: id, variantId, status: "deleting variant" });
+  console.log({ route: "DELETE /api/products/delete-variant", productId: id, variantId, status: "deleting variant" });
   try {
     const result = await db.query(
       "DELETE FROM product_variants WHERE id = $1 AND product_id = $2 RETURNING id",
       [variantId, id]
     );
     if (result.rows.length === 0) {
-      log({ route: "DELETE /api/products/delete-variant", productId: id, variantId, status: 404, message: "Variant not found" });
+      console.log({ route: "DELETE /api/products/delete-variant", productId: id, variantId, status: 404, message: "Variant not found" });
       return res.status(404).json({ success: false, message: "Variant not found" });
     }
-    log({ route: "DELETE /api/products/delete-variant", productId: id, variantId, status: 200 });
+    console.log({ route: "DELETE /api/products/delete-variant", productId: id, variantId, status: 200 });
     return res.json({ success: true, message: "Variant deleted" });
   } catch (err) {
-    lerr({ route: "DELETE /api/products/delete-variant", productId: id, variantId, status: 500, error: err.message });
+    console.error({ route: "DELETE /api/products/delete-variant", productId: id, variantId, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -521,7 +518,7 @@ async function deleteVariant(req, res) {
 // ==================================================================
 async function addImage(req, res) {
   let { productId: id, imageUrl, sortOrder, isPrimary } = req.body;
-  log({ route: "POST /api/products/add-image", productId: id });
+  console.log({ route: "POST /api/products/add-image", productId: id });
 
   try {
     if (req.file) {
@@ -540,10 +537,10 @@ async function addImage(req, res) {
        VALUES ($1,$2,$3,$4) RETURNING *`,
       [id, imageUrl, sortOrder || 0, isPrimary || false]
     );
-    log({ route: "POST /api/products/add-image", productId: id, status: 201, imageId: result.rows[0].id });
+    console.log({ route: "POST /api/products/add-image", productId: id, status: 201, imageId: result.rows[0].id });
     return res.status(201).json({ success: true, message: "Image added", image: formatImage(result.rows[0]) });
   } catch (err) {
-    lerr({ route: "POST /api/products/add-image", productId: id, status: 500, error: err.message });
+    console.error({ route: "POST /api/products/add-image", productId: id, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -554,7 +551,7 @@ async function addImage(req, res) {
 // ==================================================================
 async function deleteImage(req, res) {
   const { productId: id, imageId } = req.body;
-  log({ route: "DELETE /api/products/delete-image", productId: id, imageId });
+  console.log({ route: "DELETE /api/products/delete-image", productId: id, imageId });
   try {
     const result = await db.query(
       "DELETE FROM product_images WHERE id = $1 AND product_id = $2 RETURNING image_url",
@@ -564,10 +561,10 @@ async function deleteImage(req, res) {
       return res.status(404).json({ success: false, message: "Image not found" });
     }
     await deleteFromSupabase(result.rows[0].image_url);
-    log({ route: "DELETE /api/products/delete-image", productId: id, imageId, status: 200 });
+    console.log({ route: "DELETE /api/products/delete-image", productId: id, imageId, status: 200 });
     return res.json({ success: true, message: "Image deleted" });
   } catch (err) {
-    lerr({ route: "DELETE /api/products/delete-image", productId: id, imageId, status: 500, error: err.message });
+    console.error({ route: "DELETE /api/products/delete-image", productId: id, imageId, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -578,10 +575,10 @@ async function deleteImage(req, res) {
 // ==================================================================
 async function addReview(req, res) {
   const { productId: id, rating, title, comment } = req.body;
-  log({ route: "POST /api/products/add-review", productId: id, userId: req.user.id, body: { rating, title }, status: "submitting review" });
+  console.log({ route: "POST /api/products/add-review", productId: id, userId: req.user.id, body: { rating, title }, status: "submitting review" });
 
   if (!rating || rating < 1 || rating > 5) {
-    log({ route: "POST /api/products/add-review", productId: id, userId: req.user.id, status: 400, message: "invalid rating" });
+    console.log({ route: "POST /api/products/add-review", productId: id, userId: req.user.id, status: 400, message: "invalid rating" });
     return res.status(400).json({ success: false, message: "rating must be between 1 and 5" });
   }
   try {
@@ -591,7 +588,7 @@ async function addReview(req, res) {
       [id, req.user.id]
     );
     if (dup.rows.length > 0) {
-      log({ route: "POST /api/products/add-review", productId: id, userId: req.user.id, status: 409, message: "already reviewed" });
+      console.log({ route: "POST /api/products/add-review", productId: id, userId: req.user.id, status: 409, message: "already reviewed" });
       return res.status(409).json({ success: false, message: "You have already reviewed this product" });
     }
     // Check if verified purchase
@@ -611,10 +608,10 @@ async function addReview(req, res) {
        RETURNING *`,
       [id, req.user.id, rating, title || null, comment || null, isVerified]
     );
-    log({ route: "POST /api/products/add-review", productId: id, userId: req.user.id, status: 201, reviewId: result.rows[0].id });
+    console.log({ route: "POST /api/products/add-review", productId: id, userId: req.user.id, status: 201, reviewId: result.rows[0].id });
     return res.status(201).json({ success: true, message: "Review submitted", review: formatReview(result.rows[0]) });
   } catch (err) {
-    lerr({ route: "POST /api/products/add-review", productId: id, userId: req.user.id, status: 500, error: err.message });
+    console.error({ route: "POST /api/products/add-review", productId: id, userId: req.user.id, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -624,20 +621,20 @@ async function addReview(req, res) {
 // ==================================================================
 async function deleteReview(req, res) {
   const { productId: id, reviewId } = req.body;
-  log({ route: "DELETE /api/products/delete-review", productId: id, reviewId, status: "deleting review" });
+  console.log({ route: "DELETE /api/products/delete-review", productId: id, reviewId, status: "deleting review" });
   try {
     const result = await db.query(
       "DELETE FROM product_reviews WHERE id = $1 AND product_id = $2 RETURNING id",
       [reviewId, id]
     );
     if (result.rows.length === 0) {
-      log({ route: "DELETE /api/products/delete-review", productId: id, reviewId, status: 404, message: "Review not found" });
+      console.log({ route: "DELETE /api/products/delete-review", productId: id, reviewId, status: 404, message: "Review not found" });
       return res.status(404).json({ success: false, message: "Review not found" });
     }
-    log({ route: "DELETE /api/products/delete-review", productId: id, reviewId, status: 200 });
+    console.log({ route: "DELETE /api/products/delete-review", productId: id, reviewId, status: 200 });
     return res.json({ success: true, message: "Review deleted" });
   } catch (err) {
-    lerr({ route: "DELETE /api/products/delete-review", productId: id, reviewId, status: 500, error: err.message });
+    console.error({ route: "DELETE /api/products/delete-review", productId: id, reviewId, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }

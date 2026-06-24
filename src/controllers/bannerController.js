@@ -20,21 +20,18 @@ function formatBanner(b) {
   };
 }
 
-const log  = (data) => console.log(data);
-const lerr = (data) => console.error(data);
-
 // ==================================================================
 // PUBLIC — GET /api/banners/get-banners
 // ==================================================================
 async function getBanners(req, res) {
-  log({ route: "GET /api/banners/get-banners", status: "fetching active banners" });
+  console.log({ route: "GET /api/banners/get-banners", status: "fetching active banners" });
   try {
     const result = await db.query(
       `SELECT * FROM banners WHERE is_active = TRUE ORDER BY id ASC`
     );
     return res.status(200).json({ success: true, banners: result.rows.map(formatBanner) });
   } catch (err) {
-    lerr({ route: "GET /api/banners/get-banners", error: err.message });
+    console.error({ route: "GET /api/banners/get-banners", error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -43,7 +40,7 @@ async function getBanners(req, res) {
 // ADMIN — GET /api/banners/get-all
 // ==================================================================
 async function getAllBanners(req, res) {
-  log({ route: "GET /api/banners/get-all", status: "fetching all banners" });
+  console.log({ route: "GET /api/banners/get-all", status: "fetching all banners" });
   try {
     const result = await db.query(`SELECT * FROM banners ORDER BY id ASC`);
     if (result.rows.length === 0) {
@@ -51,7 +48,7 @@ async function getAllBanners(req, res) {
     }
     return res.status(200).json({ success: true, banners: result.rows.map(formatBanner) });
   } catch (err) {
-    lerr({ route: "GET /api/banners/get-all", error: err.message });
+    console.error({ route: "GET /api/banners/get-all", error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -62,7 +59,7 @@ async function getAllBanners(req, res) {
 // ==================================================================
 async function createBanner(req, res) {
   let { title, subtitle, imageUrl, videoUrl, isActive } = req.body;
-  log({ route: "POST /api/banners/create-banner", body: { title, subtitle, isActive } });
+  console.log({ route: "POST /api/banners/create-banner", body: { title, subtitle, isActive } });
 
   try {
     if (req.files?.imageFile?.[0]) {
@@ -86,10 +83,10 @@ async function createBanner(req, res) {
        VALUES ($1, $2, $3, $4, $5) RETURNING *`,
       [title.trim(), subtitle || null, imageUrl, videoUrl || null, isActive ?? true]
     );
-    log({ route: "POST /api/banners/create-banner", status: 201, bannerId: result.rows[0].id });
+    console.log({ route: "POST /api/banners/create-banner", status: 201, bannerId: result.rows[0].id });
     return res.status(201).json({ success: true, message: "Banner created", banner: formatBanner(result.rows[0]) });
   } catch (err) {
-    lerr({ route: "POST /api/banners/create-banner", error: err.message });
+    console.error({ route: "POST /api/banners/create-banner", error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -100,7 +97,7 @@ async function createBanner(req, res) {
 // ==================================================================
 async function updateBanner(req, res) {
   let { id, title, subtitle, imageUrl, videoUrl, isActive } = req.body;
-  log({ route: "PUT /api/banners/update-banner", bannerId: id });
+  console.log({ route: "PUT /api/banners/update-banner", bannerId: id });
 
   if (!id) {
     return res.status(400).json({ success: false, message: "Banner id is required" });
@@ -151,10 +148,10 @@ async function updateBanner(req, res) {
       await deleteFromSupabase(oldVideoUrl);
     }
 
-    log({ route: "PUT /api/banners/update-banner", bannerId: id, status: 200 });
+    console.log({ route: "PUT /api/banners/update-banner", bannerId: id, status: 200 });
     return res.status(200).json({ success: true, message: "Banner updated", banner: formatBanner(result.rows[0]) });
   } catch (err) {
-    lerr({ route: "PUT /api/banners/update-banner", bannerId: id, error: err.message });
+    console.error({ route: "PUT /api/banners/update-banner", bannerId: id, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -165,7 +162,7 @@ async function updateBanner(req, res) {
 // ==================================================================
 async function deleteBanner(req, res) {
   const { id } = req.body;
-  log({ route: "DELETE /api/banners/delete-banner", bannerId: id });
+  console.log({ route: "DELETE /api/banners/delete-banner", bannerId: id });
 
   if (!id) {
     return res.status(400).json({ success: false, message: "Banner id is required" });
@@ -185,10 +182,10 @@ async function deleteBanner(req, res) {
       deleteFromSupabase(video_url),
     ]);
 
-    log({ route: "DELETE /api/banners/delete-banner", bannerId: id, status: 200 });
+    console.log({ route: "DELETE /api/banners/delete-banner", bannerId: id, status: 200 });
     return res.status(200).json({ success: true, message: "Banner deleted" });
   } catch (err) {
-    lerr({ route: "DELETE /api/banners/delete-banner", bannerId: id, error: err.message });
+    console.error({ route: "DELETE /api/banners/delete-banner", bannerId: id, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }

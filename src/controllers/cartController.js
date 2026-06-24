@@ -1,8 +1,5 @@
 const db = require("../config/db.js");
 
-const log = (data) => console.log(data);
-const lerr = (data) => console.error(data);
-
 // ------------------------------------------------------------------
 // Get or create the user's cart row, return the cart id.
 // All cart operations go through this — one upsert, no race condition.
@@ -77,13 +74,13 @@ async function fetchCart(userId) {
 // Returns the full cart with product details in one JOIN query.
 // ==================================================================
 async function getCart(req, res) {
-  log({ route: "GET /api/cart", userId: req.user.id, status: "fetching cart" });
+  console.log({ route: "GET /api/cart", userId: req.user.id, status: "fetching cart" });
   try {
     const cart = await fetchCart(req.user.id);
-    log({ route: "GET /api/cart", userId: req.user.id, status: 200 });
+    console.log({ route: "GET /api/cart", userId: req.user.id, status: 200 });
     return res.json({ success: true, cart });
   } catch (err) {
-    lerr({ route: "GET /api/cart", userId: req.user.id, status: 500, error: err.message });
+    console.error({ route: "GET /api/cart", userId: req.user.id, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -95,14 +92,14 @@ async function getCart(req, res) {
 // ==================================================================
 async function addToCart(req, res) {
   const { variantId, quantity = 1 } = req.body;
-  log({ route: "POST /api/cart", userId: req.user.id, body: { variantId, quantity }, status: "adding item to cart" });
+  console.log({ route: "POST /api/cart", userId: req.user.id, body: { variantId, quantity }, status: "adding item to cart" });
 
   if (!variantId) {
-    log({ route: "POST /api/cart", userId: req.user.id, status: 400, message: "variantId is required" });
+    console.log({ route: "POST /api/cart", userId: req.user.id, status: 400, message: "variantId is required" });
     return res.status(400).json({ success: false, message: "variantId is required" });
   }
   if (!Number.isInteger(quantity) || quantity < 1) {
-    log({ route: "POST /api/cart", userId: req.user.id, status: 400, message: "quantity must be a positive integer" });
+    console.log({ route: "POST /api/cart", userId: req.user.id, status: 400, message: "quantity must be a positive integer" });
     return res.status(400).json({ success: false, message: "quantity must be a positive integer" });
   }
 
@@ -114,7 +111,7 @@ async function addToCart(req, res) {
       [variantId]
     );
     if (varRes.rows.length === 0) {
-      log({ route: "POST /api/cart", userId: req.user.id, status: 404, message: "Variant not found or inactive" });
+      console.log({ route: "POST /api/cart", userId: req.user.id, status: 404, message: "Variant not found or inactive" });
       return res.status(404).json({ success: false, message: "Variant not found or inactive" });
     }
 
@@ -131,7 +128,7 @@ async function addToCart(req, res) {
       : quantity;
 
     if (newQty > varRes.rows[0].stock_qty) {
-      log({ route: "POST /api/cart", userId: req.user.id, status: 400, message: "insufficient stock" });
+      console.log({ route: "POST /api/cart", userId: req.user.id, status: 400, message: "insufficient stock" });
       return res.status(400).json({
         success: false,
         message: `Only ${varRes.rows[0].stock_qty} units available in stock`
@@ -148,10 +145,10 @@ async function addToCart(req, res) {
     );
 
     const cart = await fetchCart(req.user.id);
-    log({ route: "POST /api/cart", userId: req.user.id, status: 201 });
+    console.log({ route: "POST /api/cart", userId: req.user.id, status: 201 });
     return res.status(201).json({ success: true, message: "Item added to cart", cart });
   } catch (err) {
-    lerr({ route: "POST /api/cart", userId: req.user.id, status: 500, error: err.message });
+    console.error({ route: "POST /api/cart", userId: req.user.id, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -164,10 +161,10 @@ async function addToCart(req, res) {
 async function updateCartItem(req, res) {
   const { itemId } = req.body;
   const quantity = parseInt(req.body.quantity);
-  log({ route: "PUT /api/cart/update-item", userId: req.user.id, itemId, quantity, status: "updating cart item quantity" });
+  console.log({ route: "PUT /api/cart/update-item", userId: req.user.id, itemId, quantity, status: "updating cart item quantity" });
 
   if (isNaN(quantity) || quantity < 0) {
-    log({ route: "PUT /api/cart/update-item", userId: req.user.id, itemId, status: 400, message: "quantity must be 0 or more" });
+    console.log({ route: "PUT /api/cart/update-item", userId: req.user.id, itemId, status: 400, message: "quantity must be 0 or more" });
     return res.status(400).json({ success: false, message: "quantity must be 0 or more" });
   }
 
@@ -183,7 +180,7 @@ async function updateCartItem(req, res) {
     );
 
     if (itemRes.rows.length === 0) {
-      log({ route: "PUT /api/cart/update-item", userId: req.user.id, itemId, status: 404, message: "Cart item not found" });
+      console.log({ route: "PUT /api/cart/update-item", userId: req.user.id, itemId, status: 404, message: "Cart item not found" });
       return res.status(404).json({ success: false, message: "Cart item not found" });
     }
 
@@ -191,7 +188,7 @@ async function updateCartItem(req, res) {
       await db.query("DELETE FROM cart_items WHERE id = $1", [itemId]);
     } else {
       if (quantity > itemRes.rows[0].stock_qty) {
-        log({ route: "PUT /api/cart/update-item", userId: req.user.id, itemId, status: 400, message: "insufficient stock" });
+        console.log({ route: "PUT /api/cart/update-item", userId: req.user.id, itemId, status: 400, message: "insufficient stock" });
         return res.status(400).json({
           success: false,
           message: `Only ${itemRes.rows[0].stock_qty} units available in stock`
@@ -204,10 +201,10 @@ async function updateCartItem(req, res) {
     }
 
     const cart = await fetchCart(req.user.id);
-    log({ route: "PUT /api/cart/update-item", userId: req.user.id, itemId, status: 200 });
+    console.log({ route: "PUT /api/cart/update-item", userId: req.user.id, itemId, status: 200 });
     return res.json({ success: true, message: "Cart updated", cart });
   } catch (err) {
-    lerr({ route: "PUT /api/cart/update-item", userId: req.user.id, itemId, status: 500, error: err.message });
+    console.error({ route: "PUT /api/cart/update-item", userId: req.user.id, itemId, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -218,7 +215,7 @@ async function updateCartItem(req, res) {
 // ==================================================================
 async function removeCartItem(req, res) {
   const { itemId } = req.body;
-  log({ route: "DELETE /api/cart/remove-item", userId: req.user.id, itemId, status: "removing cart item" });
+  console.log({ route: "DELETE /api/cart/remove-item", userId: req.user.id, itemId, status: "removing cart item" });
   try {
     const result = await db.query(
       `DELETE FROM cart_items
@@ -228,14 +225,14 @@ async function removeCartItem(req, res) {
       [itemId, req.user.id]
     );
     if (result.rows.length === 0) {
-      log({ route: "DELETE /api/cart/remove-item", userId: req.user.id, itemId, status: 404, message: "Cart item not found" });
+      console.log({ route: "DELETE /api/cart/remove-item", userId: req.user.id, itemId, status: 404, message: "Cart item not found" });
       return res.status(404).json({ success: false, message: "Cart item not found" });
     }
     const cart = await fetchCart(req.user.id);
-    log({ route: "DELETE /api/cart/remove-item", userId: req.user.id, itemId, status: 200 });
+    console.log({ route: "DELETE /api/cart/remove-item", userId: req.user.id, itemId, status: 200 });
     return res.json({ success: true, message: "Item removed", cart });
   } catch (err) {
-    lerr({ route: "DELETE /api/cart/remove-item", userId: req.user.id, itemId, status: 500, error: err.message });
+    console.error({ route: "DELETE /api/cart/remove-item", userId: req.user.id, itemId, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -245,17 +242,17 @@ async function removeCartItem(req, res) {
 // Clear the entire cart.
 // ==================================================================
 async function clearCart(req, res) {
-  log({ route: "DELETE /api/cart", userId: req.user.id, status: "clearing cart" });
+  console.log({ route: "DELETE /api/cart", userId: req.user.id, status: "clearing cart" });
   try {
     await db.query(
       `DELETE FROM cart_items
        WHERE cart_id = (SELECT id FROM carts WHERE user_id = $1)`,
       [req.user.id]
     );
-    log({ route: "DELETE /api/cart", userId: req.user.id, status: 200 });
+    console.log({ route: "DELETE /api/cart", userId: req.user.id, status: 200 });
     return res.json({ success: true, message: "Cart cleared", cart: { items: [], itemCount: 0, subtotal: 0 } });
   } catch (err) {
-    lerr({ route: "DELETE /api/cart", userId: req.user.id, status: 500, error: err.message });
+    console.error({ route: "DELETE /api/cart", userId: req.user.id, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }

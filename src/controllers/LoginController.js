@@ -3,9 +3,6 @@ const jwt = require("jsonwebtoken");
 const db = require("../config/db.js");
 const twilio = require("twilio");
 
-const log = (data) => console.log(data);
-const lerr = (data) => console.error(data);
-
 // ------------------------------------------------------------------
 // Config (read from .env)
 // ------------------------------------------------------------------
@@ -76,10 +73,10 @@ function toE164(phone) {
 async function getlogin(req, res) {
   const rawId = req.body.identifier ?? req.body.email ?? req.body.phone ?? req.body.login;
   const password = req.body.password;
-  log({ route: "POST /user-login", identifier: normalizeIdentifier(rawId), status: "logging in" });
+  console.log({ route: "POST /user-login", identifier: normalizeIdentifier(rawId), status: "logging in" });
 
   if (!rawId || !password) {
-    log({ route: "POST /user-login", status: 400, message: "Email/phone and password are required" });
+    console.log({ route: "POST /user-login", status: 400, message: "Email/phone and password are required" });
     return res.status(400).json({ success: false, message: "Email/phone and password are required" });
   }
 
@@ -91,19 +88,19 @@ async function getlogin(req, res) {
       [identifier]
     );
     if (result.rows.length === 0) {
-      log({ route: "POST /user-login", identifier, status: 401, message: "Invalid credentials" });
+      console.log({ route: "POST /user-login", identifier, status: 401, message: "Invalid credentials" });
       return res.status(401).json({ success: false, message: "Invalid credentials" });
     }
 
     const user = result.rows[0];
     if (user.status === "blocked") {
-      log({ route: "POST /user-login", identifier, status: 403, message: "Account blocked" });
+      console.log({ route: "POST /user-login", identifier, status: 403, message: "Account blocked" });
       return res.status(403).json({ success: false, message: "This account has been blocked. Please contact support." });
     }
 
     const ok = await bcrypt.compare(password, user.password_hash || "");
     if (!ok) {
-      log({ route: "POST /user-login", identifier, status: 401, message: "Invalid credentials" });
+      console.log({ route: "POST /user-login", identifier, status: 401, message: "Invalid credentials" });
       return res.status(401).json({ success: false, message: "Invalid credentials" });
     }
 
@@ -117,7 +114,7 @@ async function getlogin(req, res) {
       [user.id, refreshToken, expiresAt]
     );
 
-    log({ route: "POST /user-login", identifier, userId: user.id, status: 200 });
+    console.log({ route: "POST /user-login", identifier, userId: user.id, status: 200 });
     return res.json({
       success: true,
       message: "Signed in successfully",
@@ -126,7 +123,7 @@ async function getlogin(req, res) {
       user: publicUser(user)
     });
   } catch (err) {
-    lerr({ route: "POST /user-login", identifier, status: 500, error: err.message });
+    console.error({ route: "POST /user-login", identifier, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -138,9 +135,9 @@ async function getlogin(req, res) {
 // ==================================================================
 async function refreshAccessToken(req, res) {
   const refreshToken = req.body.refreshToken;
-  log({ route: "POST /refresh-token", status: "refreshing access token" });
+  console.log({ route: "POST /refresh-token", status: "refreshing access token" });
   if (!refreshToken) {
-    log({ route: "POST /refresh-token", status: 400, message: "refreshToken is required" });
+    console.log({ route: "POST /refresh-token", status: 400, message: "refreshToken is required" });
     return res.status(400).json({ success: false, message: "refreshToken is required" });
   }
 
@@ -151,16 +148,16 @@ async function refreshAccessToken(req, res) {
       [refreshToken]
     );
     if (stored.rows.length === 0) {
-      log({ route: "POST /refresh-token", status: 401, message: "Invalid or expired refresh token" });
+      console.log({ route: "POST /refresh-token", status: 401, message: "Invalid or expired refresh token" });
       return res.status(401).json({ success: false, message: "Invalid or expired refresh token" });
     }
 
     let payload;
     try {
       payload = jwt.verify(refreshToken, REFRESH_TOKEN_SECRET);
-      log({ message: "Refresh token payload", payload });
+      console.log({ message: "Refresh token payload", payload });
     } catch (e) {
-      log({ route: "POST /refresh-token", status: 401, message: "jwt verification failed" });
+      console.log({ route: "POST /refresh-token", status: 401, message: "jwt verification failed" });
       return res.status(401).json({ success: false, message: "Invalid or expired refresh token" });
     }
 
@@ -169,21 +166,21 @@ async function refreshAccessToken(req, res) {
       [payload.id]
     );
     if (userRes.rows.length === 0) {
-      log({ route: "POST /refresh-token", userId: payload.id, status: 401, message: "User no longer exists" });
+      console.log({ route: "POST /refresh-token", userId: payload.id, status: 401, message: "User no longer exists" });
       return res.status(401).json({ success: false, message: "User no longer exists" });
     }
 
     const user = userRes.rows[0];
     if (user.status === "blocked") {
-      log({ route: "POST /refresh-token", userId: user.id, status: 403, message: "Account blocked" });
+      console.log({ route: "POST /refresh-token", userId: user.id, status: 403, message: "Account blocked" });
       return res.status(403).json({ success: false, message: "Account blocked" });
     }
 
     const accessToken = signAccessToken(user);
-    log({ route: "POST /refresh-token", userId: user.id, status: 200 });
+    console.log({ route: "POST /refresh-token", userId: user.id, status: 200 });
     return res.json({ success: true, accessToken });
   } catch (err) {
-    lerr({ route: "POST /refresh-token", status: 500, error: err.message });
+    console.error({ route: "POST /refresh-token", status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -195,7 +192,7 @@ async function refreshAccessToken(req, res) {
 // ==================================================================
 async function logout(req, res) {
   const refreshToken = req.body.refreshToken;
-  log({ route: "POST /logout", userId: req.user.id, hasRefreshToken: !!refreshToken, status: "logging out" });
+  console.log({ route: "POST /logout", userId: req.user.id, hasRefreshToken: !!refreshToken, status: "logging out" });
   try {
     if (refreshToken) {
       await db.query(
@@ -205,10 +202,10 @@ async function logout(req, res) {
     } else {
       await db.query("DELETE FROM refresh_tokens WHERE user_id = $1", [req.user.id]);
     }
-    log({ route: "POST /logout", userId: req.user.id, status: 200 });
+    console.log({ route: "POST /logout", userId: req.user.id, status: 200 });
     return res.json({ success: true, message: "Logged out successfully" });
   } catch (err) {
-    lerr({ route: "POST /logout", userId: req.user.id, status: 500, error: err.message });
+    console.error({ route: "POST /logout", userId: req.user.id, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -220,16 +217,16 @@ async function logout(req, res) {
 // ==================================================================
 async function otpgenerate(req, res) {
   const phone = req.body.phone ? String(req.body.phone).trim() : "";
-  log({ route: "POST /otp-create", phone, status: "generating OTP" });
+  console.log({ route: "POST /otp-create", phone, status: "generating OTP" });
   if (!phone) {
-    log({ route: "POST /otp-create", status: 400, message: "phone is required" });
+    console.log({ route: "POST /otp-create", status: 400, message: "phone is required" });
     return res.status(400).json({ success: false, message: "phone is required" });
   }
 
   try {
     const userRes = await db.query("SELECT id FROM users WHERE phone = $1", [phone]);
     if (userRes.rows.length === 0) {
-      log({ route: "POST /otp-create", phone, status: 404, message: "No account found with this phone number" });
+      console.log({ route: "POST /otp-create", phone, status: 404, message: "No account found with this phone number" });
       return res.status(404).json({ success: false, message: "No account found with this phone number" });
     }
 
@@ -237,10 +234,10 @@ async function otpgenerate(req, res) {
       .verifications
       .create({ to: toE164(phone), channel: "sms" });
 
-    log({ route: "POST /otp-create", phone, status: 200, message: "Twilio Verify OTP sent" });
+    console.log({ route: "POST /otp-create", phone, status: 200, message: "Twilio Verify OTP sent" });
     return res.json({ success: true, message: "OTP sent" });
   } catch (err) {
-    lerr({ route: "POST /otp-create", phone, status: 500, error: err.message });
+    console.error({ route: "POST /otp-create", phone, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -254,17 +251,17 @@ async function otpgenerate(req, res) {
 async function otpverify(req, res) {
   const phone = req.body.phone ? String(req.body.phone).trim() : "";
   const otp = req.body.otp ? String(req.body.otp).trim() : "";
-  log({ route: "POST /otp-verify", phone, status: "verifying OTP" });
+  console.log({ route: "POST /otp-verify", phone, status: "verifying OTP" });
 
   if (!phone || !otp) {
-    log({ route: "POST /otp-verify", phone, status: 400, message: "phone and otp are required" });
+    console.log({ route: "POST /otp-verify", phone, status: 400, message: "phone and otp are required" });
     return res.status(400).json({ success: false, message: "phone and otp are required" });
   }
 
   try {
     const userRes = await db.query("SELECT id FROM users WHERE phone = $1", [phone]);
     if (userRes.rows.length === 0) {
-      log({ route: "POST /otp-verify", phone, status: 400, message: "No account found" });
+      console.log({ route: "POST /otp-verify", phone, status: 400, message: "No account found" });
       return res.status(400).json({ success: false, message: "Invalid or expired OTP" });
     }
     const user = userRes.rows[0];
@@ -274,7 +271,7 @@ async function otpverify(req, res) {
       .create({ to: toE164(phone), code: otp });
 
     if (check.status !== "approved") {
-      log({ route: "POST /otp-verify", phone, status: 400, message: `OTP status: ${check.status}` });
+      console.log({ route: "POST /otp-verify", phone, status: 400, message: `OTP status: ${check.status}` });
       return res.status(400).json({ success: false, message: "Invalid or expired OTP" });
     }
 
@@ -287,10 +284,10 @@ async function otpverify(req, res) {
       [user.id, phone, otp, expiresAt]
     );
 
-    log({ route: "POST /otp-verify", phone, status: 200 });
+    console.log({ route: "POST /otp-verify", phone, status: 200 });
     return res.json({ success: true, message: "OTP verified. You can now set a new password." });
   } catch (err) {
-    lerr({ route: "POST /otp-verify", phone, status: 500, error: err.message });
+    console.error({ route: "POST /otp-verify", phone, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -303,22 +300,22 @@ async function otpverify(req, res) {
 async function setpassword(req, res) {
   const phone = req.body.phone ? String(req.body.phone).trim() : "";
   const newPassword = req.body.newPassword ?? req.body.password;
-  log({ route: "POST /reset-password", phone, status: "setting password" });
+  console.log({ route: "POST /reset-password", phone, status: "setting password" });
 
   if (!phone || !newPassword) {
-    log({ route: "POST /reset-password", phone, status: 400, message: "phone and newPassword are required" });
+    console.log({ route: "POST /reset-password", phone, status: 400, message: "phone and newPassword are required" });
     return res.status(400).json({ success: false, message: "phone and newPassword are required" });
   }
   const pwErr = validatePassword(newPassword);
   if (pwErr) {
-    log({ route: "POST /reset-password", phone, status: 400, message: pwErr });
+    console.log({ route: "POST /reset-password", phone, status: 400, message: pwErr });
     return res.status(400).json({ success: false, message: pwErr });
   }
 
   try {
     const userRes = await db.query("SELECT id FROM users WHERE phone = $1", [phone]);
     if (userRes.rows.length === 0) {
-      log({ route: "POST /reset-password", phone, status: 400, message: "User not found" });
+      console.log({ route: "POST /reset-password", phone, status: 400, message: "User not found" });
       return res.status(400).json({ success: false, message: "Invalid request" });
     }
     const user = userRes.rows[0];
@@ -331,7 +328,7 @@ async function setpassword(req, res) {
       [user.id, phone]
     );
     if (otpRes.rows.length === 0) {
-      log({ route: "POST /reset-password", phone, status: 400, message: "OTP not verified" });
+      console.log({ route: "POST /reset-password", phone, status: 400, message: "OTP not verified" });
       return res.status(400).json({ success: false, message: "Please verify the OTP first" });
     }
 
@@ -346,10 +343,10 @@ async function setpassword(req, res) {
     // Log out all existing sessions after a password change (best practice).
     await db.query("DELETE FROM refresh_tokens WHERE user_id = $1", [user.id]);
 
-    log({ route: "POST /reset-password", phone, userId: user.id, status: 200 });
+    console.log({ route: "POST /reset-password", phone, userId: user.id, status: 200 });
     return res.json({ success: true, message: "Password reset successfully. Please log in." });
   } catch (err) {
-    lerr({ route: "POST /reset-password", phone, status: 500, error: err.message });
+    console.error({ route: "POST /reset-password", phone, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -361,19 +358,19 @@ async function setpassword(req, res) {
 // ==================================================================
 async function register(req, res) {
   const { email, fullName, password, phone } = req.body;
-  log({ route: "POST /register", email, phone, status: "registering customer" });
+  console.log({ route: "POST /register", email, phone, status: "registering customer" });
 
   if (!email || !fullName || !password) {
-    log({ route: "POST /register", status: 400, message: "email, fullName and password are required" });
+    console.log({ route: "POST /register", status: 400, message: "email, fullName and password are required" });
     return res.status(400).json({ success: false, message: "email, fullName and password are required" });
   }
   if (!isEmail(email)) {
-    log({ route: "POST /register", status: 400, message: "Invalid email" });
+    console.log({ route: "POST /register", status: 400, message: "Invalid email" });
     return res.status(400).json({ success: false, message: "Invalid email address" });
   }
   const pwErr = validatePassword(password);
   if (pwErr) {
-    log({ route: "POST /register", status: 400, message: pwErr });
+    console.log({ route: "POST /register", status: 400, message: pwErr });
     return res.status(400).json({ success: false, message: pwErr });
   }
 
@@ -386,7 +383,7 @@ async function register(req, res) {
       [normalizedEmail, normalizedPhone]
     );
     if (existing.rows.length > 0) {
-      log({ route: "POST /register", email: normalizedEmail, phone: normalizedPhone, status: 409, message: "Account already exists" });
+      console.log({ route: "POST /register", email: normalizedEmail, phone: normalizedPhone, status: 409, message: "Account already exists" });
       return res.status(409).json({ success: false, message: "An account with this email or phone already exists" });
     }
 
@@ -408,7 +405,7 @@ async function register(req, res) {
       [user.id, refreshToken, expiresAt]
     );
 
-    log({ route: "POST /register", email: normalizedEmail, userId: user.id, status: 201 });
+    console.log({ route: "POST /register", email: normalizedEmail, userId: user.id, status: 201 });
     return res.status(201).json({
       success: true,
       message: "Account created successfully",
@@ -417,7 +414,7 @@ async function register(req, res) {
       user: publicUser(user)
     });
   } catch (err) {
-    lerr({ route: "POST /register", email: normalizedEmail, status: 500, error: err.message });
+    console.error({ route: "POST /register", email: normalizedEmail, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }

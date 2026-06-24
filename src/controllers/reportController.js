@@ -1,8 +1,5 @@
 const db = require("../config/db.js");
 
-const log = (data) => console.log(data);
-const lerr = (data) => console.error(data);
-
 const num = (v) => parseFloat(v) || 0;
 
 // Shared date-range clause builder.
@@ -34,7 +31,7 @@ async function getOrderReport(req, res) {
   const status = req.query.status || null;
   const payment = req.query.payment || null;
 
-  log({ route: "GET /api/reports/orders", page, limit, from, to, orderStatus: status, payment, status: "fetching order report" });
+  console.log({ route: "GET /api/reports/orders", page, limit, from, to, orderStatus: status, payment, status: "fetching order report" });
 
   const { clause: dateClause, params: dateParams, nextIdx } =
     dateRangeClause(from, to, "o.created_at", 3);
@@ -83,7 +80,7 @@ async function getOrderReport(req, res) {
       countParams
     );
 
-    log({ route: "GET /api/reports/orders", status: 200, count: result.rows.length });
+    console.log({ route: "GET /api/reports/orders", status: 200, count: result.rows.length });
     return res.json({
       success: true,
       pagination: {
@@ -113,7 +110,7 @@ async function getOrderReport(req, res) {
       }))
     });
   } catch (err) {
-    lerr({ route: "GET /api/reports/orders", status: 500, error: err.message });
+    console.error({ route: "GET /api/reports/orders", status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -128,7 +125,7 @@ async function getRevenueReport(req, res) {
   const to = req.query.to || null;
   const period = req.query.period || "daily";
 
-  log({ route: "GET /api/reports/revenue", from, to, period, status: "fetching revenue report" });
+  console.log({ route: "GET /api/reports/revenue", from, to, period, status: "fetching revenue report" });
 
   const truncMap = { daily: "day", weekly: "week", monthly: "month" };
   const trunc = truncMap[period] || "day";
@@ -167,7 +164,7 @@ async function getRevenueReport(req, res) {
     );
 
     const t = totals.rows[0];
-    log({ route: "GET /api/reports/revenue", status: 200, count: result.rows.length });
+    console.log({ route: "GET /api/reports/revenue", status: 200, count: result.rows.length });
     return res.json({
       success: true,
       period,
@@ -188,7 +185,7 @@ async function getRevenueReport(req, res) {
       }))
     });
   } catch (err) {
-    lerr({ route: "GET /api/reports/revenue", status: 500, error: err.message });
+    console.error({ route: "GET /api/reports/revenue", status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -204,7 +201,7 @@ async function getProductReport(req, res) {
   const catSlug = req.query.category || null;
   const limit = Math.min(parseInt(req.query.limit) || 100, 500);
 
-  log({ route: "GET /api/reports/products", from, to, category: catSlug, limit, status: "fetching product report" });
+  console.log({ route: "GET /api/reports/products", from, to, category: catSlug, limit, status: "fetching product report" });
 
   const { clause: dateClause, params: dateParams, nextIdx } =
     dateRangeClause(from, to, "o.created_at", 3);
@@ -234,7 +231,7 @@ async function getProductReport(req, res) {
       [catSlug, null, ...dateParams, limit]
     );
 
-    log({ route: "GET /api/reports/products", status: 200, count: result.rows.length });
+    console.log({ route: "GET /api/reports/products", status: 200, count: result.rows.length });
     return res.json({
       success: true,
       report: result.rows.map(r => ({
@@ -250,7 +247,7 @@ async function getProductReport(req, res) {
       }))
     });
   } catch (err) {
-    lerr({ route: "GET /api/reports/products", status: 500, error: err.message });
+    console.error({ route: "GET /api/reports/products", status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -265,7 +262,7 @@ async function getCustomerReport(req, res) {
   const to = req.query.to || null;
   const limit = Math.min(parseInt(req.query.limit) || 100, 500);
 
-  log({ route: "GET /api/reports/customers", from, to, limit, status: "fetching customer report" });
+  console.log({ route: "GET /api/reports/customers", from, to, limit, status: "fetching customer report" });
 
   const { clause: dateClause, params: dateParams, nextIdx } =
     dateRangeClause(from, to, "o.created_at", 1);
@@ -293,7 +290,7 @@ async function getCustomerReport(req, res) {
       [...dateParams, limit]
     );
 
-    log({ route: "GET /api/reports/customers", status: 200, count: result.rows.length });
+    console.log({ route: "GET /api/reports/customers", status: 200, count: result.rows.length });
     return res.json({
       success: true,
       report: result.rows.map(r => ({
@@ -309,7 +306,7 @@ async function getCustomerReport(req, res) {
       }))
     });
   } catch (err) {
-    lerr({ route: "GET /api/reports/customers", status: 500, error: err.message });
+    console.error({ route: "GET /api/reports/customers", status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -323,7 +320,7 @@ async function getInventoryReport(req, res) {
   const catSlug = req.query.category || null;
   const stockStatus = req.query.status || null;
 
-  log({ route: "GET /api/reports/inventory", category: catSlug, stockStatus, status: "fetching inventory report" });
+  console.log({ route: "GET /api/reports/inventory", category: catSlug, stockStatus, status: "fetching inventory report" });
 
   const statusFilter = {
     "in_stock": "pv.stock_qty > 10",
@@ -373,7 +370,7 @@ async function getInventoryReport(req, res) {
     );
 
     const s = summary.rows[0];
-    log({ route: "GET /api/reports/inventory", status: 200, variantCount: result.rows.length });
+    console.log({ route: "GET /api/reports/inventory", status: 200, variantCount: result.rows.length });
     return res.json({
       success: true,
       summary: {
@@ -398,7 +395,7 @@ async function getInventoryReport(req, res) {
       }))
     });
   } catch (err) {
-    lerr({ route: "GET /api/reports/inventory", status: 500, error: err.message });
+    console.error({ route: "GET /api/reports/inventory", status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }

@@ -1,8 +1,5 @@
 const db = require("../config/db.js");
 
-const log = (data) => console.log(data);
-const lerr = (data) => console.error(data);
-
 // ------------------------------------------------------------------
 // Helper: parse numeric safely
 // ------------------------------------------------------------------
@@ -15,7 +12,7 @@ const num = (v) => parseFloat(v) || 0;
 // this week, this month, and all-time.
 // ==================================================================
 async function getSummary(req, res) {
-  log({ route: "GET /api/dashboard/summary", status: "fetching summary stats" });
+  console.log({ route: "GET /api/dashboard/summary", status: "fetching summary stats" });
   try {
     const stats = await db.query(`
       SELECT
@@ -70,7 +67,7 @@ async function getSummary(req, res) {
     const s = stats.rows[0];
     const c = customers.rows[0];
 
-    log({ route: "GET /api/dashboard/summary", status: 200 });
+    console.log({ route: "GET /api/dashboard/summary", status: 200 });
     return res.json({
       success: true,
       summary: {
@@ -112,7 +109,7 @@ async function getSummary(req, res) {
       }
     });
   } catch (err) {
-    lerr({ route: "GET /api/dashboard/summary", status: 500, error: err.message });
+    console.error({ route: "GET /api/dashboard/summary", status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -124,7 +121,7 @@ async function getSummary(req, res) {
 // ==================================================================
 async function getRevenueChart(req, res) {
   const period = req.query.period || "daily";
-  log({ route: "GET /api/dashboard/revenue-chart", period, status: "fetching chart data" });
+  console.log({ route: "GET /api/dashboard/revenue-chart", period, status: "fetching chart data" });
 
   const truncMap = { daily: "day", weekly: "week", monthly: "month" };
   const trunc = truncMap[period] || "day";
@@ -147,7 +144,7 @@ async function getRevenueChart(req, res) {
       ORDER BY period ASC
     `, [trunc]);
 
-    log({ route: "GET /api/dashboard/revenue-chart", period, status: 200, count: result.rows.length });
+    console.log({ route: "GET /api/dashboard/revenue-chart", period, status: 200, count: result.rows.length });
     return res.json({
       success: true,
       period,
@@ -159,7 +156,7 @@ async function getRevenueChart(req, res) {
       }))
     });
   } catch (err) {
-    lerr({ route: "GET /api/dashboard/revenue-chart", period, status: 500, error: err.message });
+    console.error({ route: "GET /api/dashboard/revenue-chart", period, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -170,7 +167,7 @@ async function getRevenueChart(req, res) {
 // ==================================================================
 async function getTopProducts(req, res) {
   const limit = Math.min(parseInt(req.query.limit) || 10, 50);
-  log({ route: "GET /api/dashboard/top-products", limit, status: "fetching top products" });
+  console.log({ route: "GET /api/dashboard/top-products", limit, status: "fetching top products" });
 
   try {
     const result = await db.query(`
@@ -192,7 +189,7 @@ async function getTopProducts(req, res) {
       LIMIT $1
     `, [limit]);
 
-    log({ route: "GET /api/dashboard/top-products", limit, status: 200, count: result.rows.length });
+    console.log({ route: "GET /api/dashboard/top-products", limit, status: 200, count: result.rows.length });
     return res.json({
       success: true,
       topProducts: result.rows.map(r => ({
@@ -205,7 +202,7 @@ async function getTopProducts(req, res) {
       }))
     });
   } catch (err) {
-    lerr({ route: "GET /api/dashboard/top-products", limit, status: 500, error: err.message });
+    console.error({ route: "GET /api/dashboard/top-products", limit, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -216,7 +213,7 @@ async function getTopProducts(req, res) {
 // ==================================================================
 async function getTopCustomers(req, res) {
   const limit = Math.min(parseInt(req.query.limit) || 10, 50);
-  log({ route: "GET /api/dashboard/top-customers", limit, status: "fetching top customers" });
+  console.log({ route: "GET /api/dashboard/top-customers", limit, status: "fetching top customers" });
 
   try {
     const result = await db.query(`
@@ -236,7 +233,7 @@ async function getTopCustomers(req, res) {
       LIMIT $1
     `, [limit]);
 
-    log({ route: "GET /api/dashboard/top-customers", limit, status: 200, count: result.rows.length });
+    console.log({ route: "GET /api/dashboard/top-customers", limit, status: 200, count: result.rows.length });
     return res.json({
       success: true,
       topCustomers: result.rows.map(r => ({
@@ -250,7 +247,7 @@ async function getTopCustomers(req, res) {
       }))
     });
   } catch (err) {
-    lerr({ route: "GET /api/dashboard/top-customers", limit, status: 500, error: err.message });
+    console.error({ route: "GET /api/dashboard/top-customers", limit, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -261,7 +258,7 @@ async function getTopCustomers(req, res) {
 // ==================================================================
 async function getLowStock(req, res) {
   const limit = Math.min(parseInt(req.query.limit) || 20, 100);
-  log({ route: "GET /api/dashboard/low-stock", limit, status: "fetching low stock variants" });
+  console.log({ route: "GET /api/dashboard/low-stock", limit, status: "fetching low stock variants" });
 
   try {
     const result = await db.query(`
@@ -279,7 +276,7 @@ async function getLowStock(req, res) {
       LIMIT $1
     `, [limit]);
 
-    log({ route: "GET /api/dashboard/low-stock", limit, status: 200, count: result.rows.length });
+    console.log({ route: "GET /api/dashboard/low-stock", limit, status: 200, count: result.rows.length });
     return res.json({
       success: true,
       lowStock: result.rows.map(r => ({
@@ -291,7 +288,7 @@ async function getLowStock(req, res) {
       }))
     });
   } catch (err) {
-    lerr({ route: "GET /api/dashboard/low-stock", limit, status: 500, error: err.message });
+    console.error({ route: "GET /api/dashboard/low-stock", limit, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -302,7 +299,7 @@ async function getLowStock(req, res) {
 // ==================================================================
 async function getRecentOrders(req, res) {
   const limit = Math.min(parseInt(req.query.limit) || 10, 50);
-  log({ route: "GET /api/dashboard/recent-orders", limit, status: "fetching recent orders" });
+  console.log({ route: "GET /api/dashboard/recent-orders", limit, status: "fetching recent orders" });
 
   try {
     const result = await db.query(`
@@ -320,7 +317,7 @@ async function getRecentOrders(req, res) {
       LIMIT $1
     `, [limit]);
 
-    log({ route: "GET /api/dashboard/recent-orders", limit, status: 200, count: result.rows.length });
+    console.log({ route: "GET /api/dashboard/recent-orders", limit, status: 200, count: result.rows.length });
     return res.json({
       success: true,
       recentOrders: result.rows.map(r => ({
@@ -335,7 +332,7 @@ async function getRecentOrders(req, res) {
       }))
     });
   } catch (err) {
-    lerr({ route: "GET /api/dashboard/recent-orders", limit, status: 500, error: err.message });
+    console.error({ route: "GET /api/dashboard/recent-orders", limit, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -345,7 +342,7 @@ async function getRecentOrders(req, res) {
 // Revenue breakdown per category.
 // ==================================================================
 async function getSalesByCategory(req, res) {
-  log({ route: "GET /api/dashboard/sales-by-category", status: "fetching sales breakdown" });
+  console.log({ route: "GET /api/dashboard/sales-by-category", status: "fetching sales breakdown" });
   try {
     const result = await db.query(`
       SELECT
@@ -362,7 +359,7 @@ async function getSalesByCategory(req, res) {
       ORDER BY revenue DESC
     `);
 
-    log({ route: "GET /api/dashboard/sales-by-category", status: 200, count: result.rows.length });
+    console.log({ route: "GET /api/dashboard/sales-by-category", status: 200, count: result.rows.length });
     return res.json({
       success: true,
       salesByCategory: result.rows.map(r => ({
@@ -373,7 +370,7 @@ async function getSalesByCategory(req, res) {
       }))
     });
   } catch (err) {
-    lerr({ route: "GET /api/dashboard/sales-by-category", status: 500, error: err.message });
+    console.error({ route: "GET /api/dashboard/sales-by-category", status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -385,7 +382,7 @@ async function getSalesByCategory(req, res) {
 async function getReturnRequests(req, res) {
   const status = req.query.status || null;
   const limit = Math.min(parseInt(req.query.limit) || 20, 100);
-  log({ route: "GET /api/dashboard/return-requests", status, limit, statusMsg: "fetching return requests" });
+  console.log({ route: "GET /api/dashboard/return-requests", status, limit, statusMsg: "fetching return requests" });
 
   try {
     const result = await db.query(`
@@ -407,13 +404,13 @@ async function getReturnRequests(req, res) {
       LIMIT $2
     `, [status, limit]);
 
-    log({ route: "GET /api/dashboard/return-requests", status, limit, status: 200, count: result.rows.length });
+    console.log({ route: "GET /api/dashboard/return-requests", status, limit, status: 200, count: result.rows.length });
     return res.json({
       success: true,
       returnRequests: result.rows
     });
   } catch (err) {
-    lerr({ route: "GET /api/dashboard/return-requests", status, limit, status: 500, error: err.message });
+    console.error({ route: "GET /api/dashboard/return-requests", status, limit, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }

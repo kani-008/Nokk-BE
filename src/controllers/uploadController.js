@@ -1,9 +1,6 @@
 const multer = require("multer");
 const { uploadToSupabase } = require("../config/supabase.js");
 
-const log  = (d) => console.log(d);
-const lerr = (d) => console.error(d);
-
 const BANNER_TYPES = new Set([
   "video/mp4", "video/webm", "video/ogg",
   "image/jpeg", "image/png", "image/webp", "image/gif",
@@ -44,14 +41,14 @@ async function uploadBannerFile(req, res) {
     return res.status(400).json({ success: false, message: "No file provided" });
   }
 
-  log({ route: "POST /api/upload/banner", file: file.originalname, size: file.size });
+  console.log({ route: "POST /api/upload/banner", file: file.originalname, size: file.size });
 
   try {
     const url = await uploadToSupabase(file.buffer, file.mimetype, file.originalname);
-    log({ route: "POST /api/upload/banner", status: 200, url });
+    console.log({ route: "POST /api/upload/banner", status: 200, url });
     return res.status(200).json({ success: true, url });
   } catch (err) {
-    lerr({ route: "POST /api/upload/banner", status: 500, error: err.message });
+    console.error({ route: "POST /api/upload/banner", status: 500, error: err.message });
     return res.status(500).json({ success: false, message: err.message });
   }
 }
@@ -67,14 +64,14 @@ async function uploadProductImage(req, res) {
     return res.status(400).json({ success: false, message: "No file provided" });
   }
 
-  log({ route: "POST /api/upload/product", file: file.originalname, size: file.size });
+  console.log({ route: "POST /api/upload/product", file: file.originalname, size: file.size });
 
   try {
     const url = await uploadToSupabase(file.buffer, file.mimetype, file.originalname, "product");
-    log({ route: "POST /api/upload/product", status: 200, url });
+    console.log({ route: "POST /api/upload/product", status: 200, url });
     return res.status(200).json({ success: true, url });
   } catch (err) {
-    lerr({ route: "POST /api/upload/product", status: 500, error: err.message });
+    console.error({ route: "POST /api/upload/product", status: 500, error: err.message });
     return res.status(500).json({ success: false, message: err.message });
   }
 }

@@ -1,8 +1,5 @@
 const db = require("../config/db.js");
 
-const log = (data) => console.log(data);
-const lerr = (data) => console.error(data);
-
 // Inventory = product_variants table — all stock management lives here.
 // product_variants columns: id, product_id, weight_grams, weight_label,
 //                           price, compare_price, stock_qty, is_active,
@@ -25,7 +22,7 @@ async function getInventory(req, res) {
   const outOfStock = req.query.outOfStock === "true";
   const catSlug = req.query.category || null;
   const search = req.query.search || null;
-  log({ route: "GET /api/inventory", query: { page, limit, lowStock, outOfStock, catSlug, search }, status: "fetching inventory" });
+  console.log({ route: "GET /api/inventory", query: { page, limit, lowStock, outOfStock, catSlug, search }, status: "fetching inventory" });
 
   try {
     const result = await db.query(
@@ -76,7 +73,7 @@ async function getInventory(req, res) {
       [lowStock, outOfStock, catSlug, search]
     );
 
-    log({ route: "GET /api/inventory", status: 200, count: result.rows.length });
+    console.log({ route: "GET /api/inventory", status: 200, count: result.rows.length });
     return res.json({
       success: true,
       pagination: {
@@ -107,7 +104,7 @@ async function getInventory(req, res) {
       }))
     });
   } catch (err) {
-    lerr({ route: "GET /api/inventory", status: 500, error: err.message });
+    console.error({ route: "GET /api/inventory", status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -117,7 +114,7 @@ async function getInventory(req, res) {
 // Stock summary counts for the admin inventory dashboard card.
 // ==================================================================
 async function getInventorySummary(req, res) {
-  log({ route: "GET /api/inventory/summary", status: "fetching inventory summary" });
+  console.log({ route: "GET /api/inventory/summary", status: "fetching inventory summary" });
   try {
     const result = await db.query(
       `SELECT
@@ -130,10 +127,10 @@ async function getInventorySummary(req, res) {
        FROM product_variants pv
        WHERE pv.is_active = TRUE`
     );
-    log({ route: "GET /api/inventory/summary", status: 200 });
+    console.log({ route: "GET /api/inventory/summary", status: 200 });
     return res.json({ success: true, summary: result.rows[0] });
   } catch (err) {
-    lerr({ route: "GET /api/inventory/summary", status: 500, error: err.message });
+    console.error({ route: "GET /api/inventory/summary", status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -146,15 +143,15 @@ async function getInventorySummary(req, res) {
 // ==================================================================
 async function updateStock(req, res) {
   const { variantId, stockQty, price, comparePrice, isActive } = req.body;
-  log({ route: "PUT /api/inventory/update-stock", variantId, body: { stockQty, price, comparePrice, isActive }, status: "updating variant stock" });
+  console.log({ route: "PUT /api/inventory/update-stock", variantId, body: { stockQty, price, comparePrice, isActive }, status: "updating variant stock" });
 
   if (stockQty === undefined && price === undefined &&
     comparePrice === undefined && isActive === undefined) {
-    log({ route: "PUT /api/inventory/update-stock", variantId, status: 400, message: "Nothing to update" });
+    console.log({ route: "PUT /api/inventory/update-stock", variantId, status: 400, message: "Nothing to update" });
     return res.status(400).json({ success: false, message: "Nothing to update" });
   }
   if (stockQty !== undefined && (isNaN(stockQty) || stockQty < 0)) {
-    log({ route: "PUT /api/inventory/update-stock", variantId, status: 400, message: "stockQty must be 0 or more" });
+    console.log({ route: "PUT /api/inventory/update-stock", variantId, status: 400, message: "stockQty must be 0 or more" });
     return res.status(400).json({ success: false, message: "stockQty must be 0 or more" });
   }
 
@@ -177,11 +174,11 @@ async function updateStock(req, res) {
       ]
     );
     if (result.rows.length === 0) {
-      log({ route: "PUT /api/inventory/update-stock", variantId, status: 404, message: "Variant not found" });
+      console.log({ route: "PUT /api/inventory/update-stock", variantId, status: 404, message: "Variant not found" });
       return res.status(404).json({ success: false, message: "Variant not found" });
     }
     const v = result.rows[0];
-    log({ route: "PUT /api/inventory/update-stock", variantId, status: 200 });
+    console.log({ route: "PUT /api/inventory/update-stock", variantId, status: 200 });
     return res.json({
       success: true,
       message: "Stock updated",
@@ -197,7 +194,7 @@ async function updateStock(req, res) {
       }
     });
   } catch (err) {
-    lerr({ route: "PUT /api/inventory/update-stock", variantId, status: 500, error: err.message });
+    console.error({ route: "PUT /api/inventory/update-stock", variantId, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -209,14 +206,14 @@ async function updateStock(req, res) {
 // ==================================================================
 async function bulkUpdateStock(req, res) {
   const { updates } = req.body;
-  log({ route: "POST /api/inventory/bulk-update", updateCount: updates?.length, status: "bulk updating stock" });
+  console.log({ route: "POST /api/inventory/bulk-update", updateCount: updates?.length, status: "bulk updating stock" });
 
   if (!Array.isArray(updates) || updates.length === 0) {
-    log({ route: "POST /api/inventory/bulk-update", status: 400, message: "updates array is required" });
+    console.log({ route: "POST /api/inventory/bulk-update", status: 400, message: "updates array is required" });
     return res.status(400).json({ success: false, message: "updates array is required" });
   }
   if (updates.length > 100) {
-    log({ route: "POST /api/inventory/bulk-update", status: 400, message: "Maximum 100 variants per bulk update" });
+    console.log({ route: "POST /api/inventory/bulk-update", status: 400, message: "Maximum 100 variants per bulk update" });
     return res.status(400).json({ success: false, message: "Maximum 100 variants per bulk update" });
   }
 
@@ -246,7 +243,7 @@ async function bulkUpdateStock(req, res) {
     }
 
     await client.query("COMMIT");
-    log({ route: "POST /api/inventory/bulk-update", status: 200, updatedCount: results.length });
+    console.log({ route: "POST /api/inventory/bulk-update", status: 200, updatedCount: results.length });
     return res.json({
       success: true,
       message: `${results.length} variant(s) updated`,
@@ -254,7 +251,7 @@ async function bulkUpdateStock(req, res) {
     });
   } catch (err) {
     await client.query("ROLLBACK");
-    lerr({ route: "POST /api/inventory/bulk-update", status: 500, error: err.message });
+    console.error({ route: "POST /api/inventory/bulk-update", status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   } finally {
     client.release();
