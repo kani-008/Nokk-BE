@@ -158,7 +158,7 @@ async function refreshAccessToken(req, res) {
     let payload;
     try {
       payload = jwt.verify(refreshToken, REFRESH_TOKEN_SECRET);
-      console.log({ message: "Refresh token payload", payload });
+      log({ message: "Refresh token payload", payload });
     } catch (e) {
       log({ route: "POST /refresh-token", status: 401, message: "jwt verification failed" });
       return res.status(401).json({ success: false, message: "Invalid or expired refresh token" });

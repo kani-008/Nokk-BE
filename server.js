@@ -1,6 +1,5 @@
 const express = require("express");
 const cors = require("cors");
-const morgan = require("morgan");
 const os = require("os");
 
 require("dotenv").config();
@@ -31,7 +30,6 @@ const HOST = "0.0.0.0"; // bind to all interfaces so phones on the same Wi-Fi ca
 
 // ── Global middleware ─────────────────────────────────────────────
 app.use(cors()); // dev: allow all origins (phone LAN origin included)
-app.use(morgan("dev"));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
