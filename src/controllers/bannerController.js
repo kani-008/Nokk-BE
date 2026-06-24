@@ -1,100 +1,129 @@
 const db = require("../config/db.js");
+const { uploadToSupabase, deleteFromSupabase } = require("../config/supabase.js");
+
+// Convert legacy signed URLs to public URLs (signing-key rotation recovery)
+function toPublicUrl(url) {
+  if (!url || !url.includes("/object/sign/")) return url;
+  return url.replace("/object/sign/", "/object/public/").split("?")[0];
+}
 
 function formatBanner(b) {
   return {
     id: b.id,
     title: b.title,
     subtitle: b.subtitle,
-    imageUrl: b.image_url,
-    videoUrl: b.video_url,
+    imageUrl: toPublicUrl(b.image_url),
+    videoUrl: toPublicUrl(b.video_url),
     isActive: b.is_active,
     createdAt: b.created_at,
     updatedAt: b.updated_at
   };
 }
 
-const log = (data) => console.log(data);
+const log  = (data) => console.log(data);
 const lerr = (data) => console.error(data);
 
 // ==================================================================
-// PUBLIC — GET /api/banners
+// PUBLIC — GET /api/banners/get-banners
 // ==================================================================
 async function getBanners(req, res) {
-  log({ route: "GET /api/banners", status: "fetching active banners" });
+  log({ route: "GET /api/banners/get-banners", status: "fetching active banners" });
   try {
     const result = await db.query(
       `SELECT * FROM banners WHERE is_active = TRUE ORDER BY id ASC`
     );
-    log({ route: "GET /api/banners", status: 200, count: result.rows.length });
     return res.status(200).json({ success: true, banners: result.rows.map(formatBanner) });
   } catch (err) {
-    lerr({ route: "GET /api/banners", status: 500, error: err.message });
+    lerr({ route: "GET /api/banners/get-banners", error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
 
 // ==================================================================
-// ADMIN — GET /api/banners/all
+// ADMIN — GET /api/banners/get-all
 // ==================================================================
 async function getAllBanners(req, res) {
-  log({ route: "GET /api/banners/all", status: "fetching all banners" });
+  log({ route: "GET /api/banners/get-all", status: "fetching all banners" });
   try {
     const result = await db.query(`SELECT * FROM banners ORDER BY id ASC`);
     if (result.rows.length === 0) {
-      log({ route: "GET /api/banners/all", status: 404, message: "No banners found" });
       return res.status(404).json({ success: false, message: "No banners found" });
     }
-    log({ route: "GET /api/banners/all", status: 200, count: result.rows.length });
     return res.status(200).json({ success: true, banners: result.rows.map(formatBanner) });
   } catch (err) {
-    lerr({ route: "GET /api/banners/all", status: 500, error: err.message });
+    lerr({ route: "GET /api/banners/get-all", error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
 
 // ==================================================================
-// ADMIN — POST /api/banners
+// ADMIN — POST /api/banners/create-banner
+// Accepts multipart/form-data (imageFile, videoFile) OR JSON (imageUrl, videoUrl).
 // ==================================================================
 async function createBanner(req, res) {
-  const { title, subtitle, imageUrl, videoUrl, isActive } = req.body;
-  log({ route: "POST /api/banners", status: "creating", body: { title, subtitle, imageUrl, videoUrl, isActive } });
-  if (!title) {
-    log({ route: "POST /api/banners", status: 400, message: "title is required" });
-    return res.status(400).json({ success: false, message: "title is required" });
-  }
-  if (!imageUrl) {
-    log({ route: "POST /api/banners", status: 400, message: "imageUrl is required" });
-    return res.status(400).json({ success: false, message: "imageUrl is required" });
-  }
+  let { title, subtitle, imageUrl, videoUrl, isActive } = req.body;
+  log({ route: "POST /api/banners/create-banner", body: { title, subtitle, isActive } });
+
   try {
+    if (req.files?.imageFile?.[0]) {
+      const f = req.files.imageFile[0];
+      imageUrl = await uploadToSupabase(f.buffer, f.mimetype, f.originalname, "banner");
+    }
+    if (req.files?.videoFile?.[0]) {
+      const f = req.files.videoFile[0];
+      videoUrl = await uploadToSupabase(f.buffer, f.mimetype, f.originalname, "banner");
+    }
+
+    if (!title) {
+      return res.status(400).json({ success: false, message: "title is required" });
+    }
+    if (!imageUrl) {
+      return res.status(400).json({ success: false, message: "imageUrl or imageFile is required" });
+    }
+
     const result = await db.query(
       `INSERT INTO banners (title, subtitle, image_url, video_url, is_active)
        VALUES ($1, $2, $3, $4, $5) RETURNING *`,
       [title.trim(), subtitle || null, imageUrl, videoUrl || null, isActive ?? true]
     );
-    if (result.rows.length === 0) {
-      log({ route: "POST /api/banners", status: 500, message: "Insert returned no rows" });
-      return res.status(500).json({ success: false, message: "Banner creation failed" });
-    }
-    log({ route: "POST /api/banners", status: 201, bannerId: result.rows[0].id });
+    log({ route: "POST /api/banners/create-banner", status: 201, bannerId: result.rows[0].id });
     return res.status(201).json({ success: true, message: "Banner created", banner: formatBanner(result.rows[0]) });
   } catch (err) {
-    lerr({ route: "POST /api/banners", status: 500, error: err.message });
+    lerr({ route: "POST /api/banners/create-banner", error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
 
 // ==================================================================
-// ADMIN — PUT /api/banners/:id
+// ADMIN — PUT /api/banners/update-banner
+// Accepts multipart/form-data or JSON. Deletes replaced files from storage.
 // ==================================================================
 async function updateBanner(req, res) {
-  const { id, title, subtitle, imageUrl, videoUrl, isActive } = req.body;
-  log({ route: "PUT /api/banners/update-banner", bannerId: id, body: { title, subtitle, imageUrl, videoUrl, isActive } });
+  let { id, title, subtitle, imageUrl, videoUrl, isActive } = req.body;
+  log({ route: "PUT /api/banners/update-banner", bannerId: id });
+
   if (!id) {
-    log({ route: "PUT /api/banners/update-banner", status: 400, message: "Banner id is required" });
     return res.status(400).json({ success: false, message: "Banner id is required" });
   }
+
   try {
+    const current = await db.query(
+      "SELECT image_url, video_url FROM banners WHERE id = $1", [id]
+    );
+    if (current.rows.length === 0) {
+      return res.status(404).json({ success: false, message: "Banner not found" });
+    }
+    const { image_url: oldImageUrl, video_url: oldVideoUrl } = current.rows[0];
+
+    if (req.files?.imageFile?.[0]) {
+      const f = req.files.imageFile[0];
+      imageUrl = await uploadToSupabase(f.buffer, f.mimetype, f.originalname, "banner");
+    }
+    if (req.files?.videoFile?.[0]) {
+      const f = req.files.videoFile[0];
+      videoUrl = await uploadToSupabase(f.buffer, f.mimetype, f.originalname, "banner");
+    }
+
     const result = await db.query(
       `UPDATE banners SET
          title      = COALESCE($1, title),
@@ -103,8 +132,7 @@ async function updateBanner(req, res) {
          video_url  = COALESCE($4, video_url),
          is_active  = COALESCE($5, is_active),
          updated_at = NOW()
-       WHERE id = $6
-       RETURNING *`,
+       WHERE id = $6 RETURNING *`,
       [
         title || null,
         subtitle !== undefined ? subtitle : null,
@@ -114,40 +142,53 @@ async function updateBanner(req, res) {
         id
       ]
     );
-    if (result.rows.length === 0) {
-      log({ route: "PUT /api/banners/update-banner", bannerId: id, status: 404, message: "Banner not found" });
-      return res.status(404).json({ success: false, message: "Banner not found" });
+
+    // Delete old Supabase files only if they were actually replaced
+    if (imageUrl && oldImageUrl && imageUrl !== oldImageUrl) {
+      await deleteFromSupabase(oldImageUrl);
     }
-    log({ route: "PUT /api/banners/update-banner", bannerId: id, status: 200, message: "Banner updated" });
+    if (videoUrl && oldVideoUrl && videoUrl !== oldVideoUrl) {
+      await deleteFromSupabase(oldVideoUrl);
+    }
+
+    log({ route: "PUT /api/banners/update-banner", bannerId: id, status: 200 });
     return res.status(200).json({ success: true, message: "Banner updated", banner: formatBanner(result.rows[0]) });
   } catch (err) {
-    lerr({ route: "PUT /api/banners/update-banner", bannerId: id, status: 500, error: err.message });
+    lerr({ route: "PUT /api/banners/update-banner", bannerId: id, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
 
 // ==================================================================
-// ADMIN — DELETE /api/banners/:id
+// ADMIN — DELETE /api/banners/delete-banner
+// Removes the DB record and deletes associated files from Supabase.
 // ==================================================================
 async function deleteBanner(req, res) {
   const { id } = req.body;
-  log({ route: "DELETE /api/banners/delete-banner", bannerId: id, status: "deleting" });
+  log({ route: "DELETE /api/banners/delete-banner", bannerId: id });
+
   if (!id) {
-    log({ route: "DELETE /api/banners/delete-banner", status: 400, message: "Banner id is required" });
     return res.status(400).json({ success: false, message: "Banner id is required" });
   }
+
   try {
     const result = await db.query(
-      "DELETE FROM banners WHERE id = $1 RETURNING id", [id]
+      "DELETE FROM banners WHERE id = $1 RETURNING image_url, video_url", [id]
     );
     if (result.rows.length === 0) {
-      log({ route: "DELETE /api/banners/delete-banner", bannerId: id, status: 404, message: "Banner not found" });
       return res.status(404).json({ success: false, message: "Banner not found" });
     }
-    log({ route: "DELETE /api/banners/delete-banner", bannerId: id, status: 200, message: "Banner deleted" });
+
+    const { image_url, video_url } = result.rows[0];
+    await Promise.allSettled([
+      deleteFromSupabase(image_url),
+      deleteFromSupabase(video_url),
+    ]);
+
+    log({ route: "DELETE /api/banners/delete-banner", bannerId: id, status: 200 });
     return res.status(200).json({ success: true, message: "Banner deleted" });
   } catch (err) {
-    lerr({ route: "DELETE /api/banners/delete-banner", bannerId: id, status: 500, error: err.message });
+    lerr({ route: "DELETE /api/banners/delete-banner", bannerId: id, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }

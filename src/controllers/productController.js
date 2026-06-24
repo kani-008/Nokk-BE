@@ -1,6 +1,7 @@
 const db = require("../config/db.js");
+const { uploadToSupabase, deleteFromSupabase } = require("../config/supabase.js");
 
-const log = (data) => console.log(data);
+const log  = (data) => console.log(data);
 const lerr = (data) => console.error(data);
 
 // ------------------------------------------------------------------

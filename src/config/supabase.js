@@ -12,14 +12,6 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
 
 const BUCKET = "Nokk";
 
-/**
- * Upload a Buffer to Supabase Storage and return the public URL.
- * @param {Buffer} buffer
- * @param {string} mimeType
- * @param {string} originalName
- * @param {"banner"|"product"} folder
- * @returns {Promise<string>}
- */
 async function uploadToSupabase(buffer, mimeType, originalName, folder = "banner") {
   const ext  = (originalName || "file").split(".").pop().toLowerCase();
   const path = `${folder}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
@@ -34,4 +26,16 @@ async function uploadToSupabase(buffer, mimeType, originalName, folder = "banner
   return data.publicUrl;
 }
 
-module.exports = { supabase, uploadToSupabase };
+// Deletes a file from Supabase Storage given its full public or signed URL.
+// Silently skips URLs that don't belong to this project's bucket.
+async function deleteFromSupabase(url) {
+  if (!url) return;
+  // Extract path after /object/public/<BUCKET>/ or /object/sign/<BUCKET>/
+  const match = url.match(/\/storage\/v1\/object\/(?:public|sign)\/[^/]+\/(.+?)(?:\?|$)/);
+  if (!match) return;
+  const path = decodeURIComponent(match[1]);
+  const { error } = await supabase.storage.from(BUCKET).remove([path]);
+  if (error) console.warn(`[Supabase] delete failed for "${path}": ${error.message}`);
+}
+
+module.exports = { supabase, uploadToSupabase, deleteFromSupabase };

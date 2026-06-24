@@ -1,6 +1,7 @@
 const db = require("../config/db.js");
+const { uploadToSupabase, deleteFromSupabase } = require("../config/supabase.js");
 
-const log = (data) => console.log(data);
+const log  = (data) => console.log(data);
 const lerr = (data) => console.error(data);
 
 // Shape for every category response — every column included
@@ -104,19 +105,20 @@ async function getCategoryBySlug(req, res) {
 // Body: { nameEn, nameTa?, slug, description?, imageUrl?, sortOrder?, isActive? }
 // ==================================================================
 async function createCategory(req, res) {
-  const { nameEn, nameTa, slug, description, imageUrl, sortOrder, isActive } = req.body;
-  log({ route: "POST /api/categories", body: { nameEn, nameTa, slug, description, imageUrl, sortOrder, isActive }, status: "creating category" });
-
-  if (!nameEn || !slug) {
-    log({ route: "POST /api/categories", status: 400, message: "nameEn and slug are required" });
-    return res.status(400).json({ success: false, message: "nameEn and slug are required" });
-  }
+  let { nameEn, nameTa, slug, description, imageUrl, sortOrder, isActive } = req.body;
+  log({ route: "POST /api/categories", body: { nameEn, nameTa, slug }, status: "creating category" });
 
   try {
-    // Slug uniqueness check — parameterized
+    if (req.file) {
+      imageUrl = await uploadToSupabase(req.file.buffer, req.file.mimetype, req.file.originalname, "category");
+    }
+
+    if (!nameEn || !slug) {
+      return res.status(400).json({ success: false, message: "nameEn and slug are required" });
+    }
+
     const dup = await db.query("SELECT id FROM categories WHERE slug = $1", [slug.trim()]);
     if (dup.rows.length > 0) {
-      log({ route: "POST /api/categories", status: 409, message: "slug already exists" });
       return res.status(409).json({ success: false, message: "A category with this slug already exists" });
     }
 
@@ -147,24 +149,26 @@ async function createCategory(req, res) {
 // Update a category — any field.
 // ==================================================================
 async function updateCategory(req, res) {
-  const { id, nameEn, nameTa, slug, description, imageUrl, sortOrder, isActive } = req.body;
-  log({ route: "PUT /api/categories/update-category", categoryId: id, body: { nameEn, nameTa, slug, description, imageUrl, sortOrder, isActive }, status: "updating category" });
+  let { id, nameEn, nameTa, slug, description, imageUrl, sortOrder, isActive } = req.body;
+  log({ route: "PUT /api/categories/update-category", categoryId: id });
 
   try {
-    const existing = await db.query("SELECT id FROM categories WHERE id = $1", [id]);
+    const existing = await db.query("SELECT id, image_url FROM categories WHERE id = $1", [id]);
     if (existing.rows.length === 0) {
-      log({ route: "PUT /api/categories/update-category", categoryId: id, status: 404, message: "Category not found" });
       return res.status(404).json({ success: false, message: "Category not found" });
     }
+    const oldImageUrl = existing.rows[0].image_url;
 
-    // Slug uniqueness (if being changed)
+    if (req.file) {
+      imageUrl = await uploadToSupabase(req.file.buffer, req.file.mimetype, req.file.originalname, "category");
+    }
+
     if (slug) {
       const dup = await db.query(
         "SELECT id FROM categories WHERE slug = $1 AND id != $2",
         [slug.trim(), id]
       );
       if (dup.rows.length > 0) {
-        log({ route: "PUT /api/categories/update-category", categoryId: id, status: 409, message: "slug already used" });
         return res.status(409).json({ success: false, message: "Slug already used by another category" });
       }
     }
@@ -192,6 +196,11 @@ async function updateCategory(req, res) {
         id
       ]
     );
+
+    if (imageUrl && oldImageUrl && imageUrl !== oldImageUrl) {
+      await deleteFromSupabase(oldImageUrl);
+    }
+
     log({ route: "PUT /api/categories/update-category", categoryId: id, status: 200 });
     return res.json({ success: true, message: "Category updated", category: formatCategory(result.rows[0]) });
   } catch (err) {
@@ -206,24 +215,25 @@ async function updateCategory(req, res) {
 // ==================================================================
 async function deleteCategory(req, res) {
   const { id } = req.body;
-  log({ route: "DELETE /api/categories/delete-category", categoryId: id, status: "deleting category" });
+  log({ route: "DELETE /api/categories/delete-category", categoryId: id });
   try {
     const inUse = await db.query(
       "SELECT COUNT(*) AS c FROM products WHERE category_id = $1 AND is_active = TRUE",
       [id]
     );
     if (parseInt(inUse.rows[0].c) > 0) {
-      log({ route: "DELETE /api/categories/delete-category", categoryId: id, status: 409, message: "cannot delete - products in use" });
       return res.status(409).json({
         success: false,
         message: "Cannot delete — active products belong to this category. Deactivate them first."
       });
     }
-    const result = await db.query("DELETE FROM categories WHERE id = $1 RETURNING id", [id]);
+    const result = await db.query(
+      "DELETE FROM categories WHERE id = $1 RETURNING image_url", [id]
+    );
     if (result.rows.length === 0) {
-      log({ route: "DELETE /api/categories/delete-category", categoryId: id, status: 404, message: "Category not found" });
       return res.status(404).json({ success: false, message: "Category not found" });
     }
+    await deleteFromSupabase(result.rows[0].image_url);
     log({ route: "DELETE /api/categories/delete-category", categoryId: id, status: 200 });
     return res.json({ success: true, message: "Category deleted" });
   } catch (err) {
