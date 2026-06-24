@@ -48,8 +48,11 @@ async function uploadBannerFile(req, res) {
     console.log({ route: "POST /api/upload/banner", status: 200, url });
     return res.status(200).json({ success: true, url });
   } catch (err) {
-    console.error({ route: "POST /api/upload/banner", status: 500, error: err.message });
-    return res.status(500).json({ success: false, message: err.message });
+    const isSupabaseError = err.message && err.message.includes("Storage upload failed");
+    const statusCode = isSupabaseError ? 502 : 500;
+    const msg = isSupabaseError ? err.message : "Internal server error";
+    console.error({ route: "POST /api/upload/banner", status: statusCode, error: err.message });
+    return res.status(statusCode).json({ success: false, message: msg });
   }
 }
 
@@ -78,8 +81,11 @@ async function uploadProductImage(req, res) {
     console.log({ route: "POST /api/upload/product", status: 200, url });
     return res.status(200).json({ success: true, url });
   } catch (err) {
-    console.error({ route: "POST /api/upload/product", status: 500, error: err.message });
-    return res.status(500).json({ success: false, message: err.message });
+    const isSupabaseError = err.message && err.message.includes("Storage upload failed");
+    const statusCode = isSupabaseError ? 502 : 500;
+    const msg = isSupabaseError ? err.message : "Internal server error";
+    console.error({ route: "POST /api/upload/product", status: statusCode, error: err.message });
+    return res.status(statusCode).json({ success: false, message: msg });
   }
 }
 

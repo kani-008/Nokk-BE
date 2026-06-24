@@ -5,6 +5,7 @@ const { uploadToSupabase, deleteFromSupabase } = require("../config/supabase.js"
 // Helpers
 // ------------------------------------------------------------------
 const num = (v) => parseFloat(v) || 0;
+const isTrue = (val) => val === true || val === "true" || val === 1 || val === "1" || val === "yes";
 
 // Full product shape — every column from products + related tables
 function formatProduct(p, variants = [], images = [], reviews = []) {
@@ -181,16 +182,30 @@ async function getAllProducts(req, res) {
     console.log({ route: "GET /api/products", status: 200, count: result.rows.length });
 
     let variantsByProduct = {};
+    let imagesByProduct = {};
     if (result.rows.length > 0) {
       const productIds = result.rows.map(r => r.id);
-      const varRes = await db.query(
-        `SELECT * FROM product_variants WHERE product_id = ANY($1) AND is_active = TRUE ORDER BY weight_grams ASC`,
-        [productIds]
-      );
+      const [varRes, imgRes] = await Promise.all([
+        db.query(
+          `SELECT * FROM product_variants WHERE product_id = ANY($1) AND is_active = TRUE ORDER BY weight_grams ASC`,
+          [productIds]
+        ),
+        db.query(
+          `SELECT * FROM product_images WHERE product_id = ANY($1) ORDER BY sort_order ASC`,
+          [productIds]
+        )
+      ]);
+
       varRes.rows.forEach(v => {
         const pid = v.product_id;
         if (!variantsByProduct[pid]) variantsByProduct[pid] = [];
         variantsByProduct[pid].push(formatVariant(v));
+      });
+
+      imgRes.rows.forEach(i => {
+        const pid = i.product_id;
+        if (!imagesByProduct[pid]) imagesByProduct[pid] = [];
+        imagesByProduct[pid].push(formatImage(i));
       });
     }
 
@@ -201,7 +216,7 @@ async function getAllProducts(req, res) {
         total: parseInt(countRes.rows[0].total),
         totalPages: Math.ceil(parseInt(countRes.rows[0].total) / limit)
       },
-      products: result.rows.map(p => formatProduct(p, variantsByProduct[p.id] || []))
+      products: result.rows.map(p => formatProduct(p, variantsByProduct[p.id] || [], imagesByProduct[p.id] || []))
     });
   } catch (err) {
     console.error({ route: "GET /api/products", status: 500, error: err.message });
@@ -290,7 +305,7 @@ async function createProduct(req, res) {
     // Insert variants
     for (const v of variants) {
       if (!v.weightLabel || !v.price) continue;
-      const stockVal = v.inStock !== undefined ? (v.inStock ? 1 : 0) : (v.stockQty !== undefined ? (parseInt(v.stockQty) > 0 ? 1 : 0) : 1);
+      const stockVal = v.inStock !== undefined ? (isTrue(v.inStock) ? 1 : 0) : (v.stockQty !== undefined ? (parseInt(v.stockQty) > 0 ? 1 : 0) : 1);
       await client.query(
         `INSERT INTO product_variants
            (product_id, weight_grams, weight_label, price, compare_price, stock_qty, is_active)
@@ -437,7 +452,7 @@ async function updateProduct(req, res) {
       // Upsert incoming variants
       for (const v of req.body.variants) {
         if (!v.weightLabel || !v.price) continue;
-        const stockVal = v.inStock !== undefined ? (v.inStock ? 1 : 0) : (v.stockQty !== undefined ? (parseInt(v.stockQty) > 0 ? 1 : 0) : undefined);
+        const stockVal = v.inStock !== undefined ? (isTrue(v.inStock) ? 1 : 0) : (v.stockQty !== undefined ? (parseInt(v.stockQty) > 0 ? 1 : 0) : undefined);
         if (v.id && currentVarIds.includes(v.id)) {
           // Update
           await client.query(
@@ -621,7 +636,7 @@ async function addVariant(req, res) {
     console.log({ route: "POST /api/products/add-variant", productId: id, status: 400, message: "missing fields" });
     return res.status(400).json({ success: false, message: "weightLabel and price are required" });
   }
-  const stockVal = inStock !== undefined ? (inStock ? 1 : 0) : (stockQty !== undefined ? (parseInt(stockQty) > 0 ? 1 : 0) : 1);
+  const stockVal = inStock !== undefined ? (isTrue(inStock) ? 1 : 0) : (stockQty !== undefined ? (parseInt(stockQty) > 0 ? 1 : 0) : 1);
   try {
     const result = await db.query(
       `INSERT INTO product_variants
@@ -646,7 +661,7 @@ async function updateVariant(req, res) {
   const { productId: id, variantId, weightGrams, weightLabel, price, comparePrice, stockQty, inStock, isActive } = req.body;
   console.log({ route: "PUT /api/products/update-variant", productId: id, variantId, body: { weightGrams, weightLabel, price, comparePrice, stockQty, inStock, isActive }, status: "updating variant" });
 
-  const stockVal = inStock !== undefined ? (inStock ? 1 : 0) : (stockQty !== undefined ? (parseInt(stockQty) > 0 ? 1 : 0) : undefined);
+  const stockVal = inStock !== undefined ? (isTrue(inStock) ? 1 : 0) : (stockQty !== undefined ? (parseInt(stockQty) > 0 ? 1 : 0) : undefined);
   try {
     const result = await db.query(
       `UPDATE product_variants SET
@@ -758,8 +773,11 @@ async function addImage(req, res) {
     console.log({ route: "POST /api/products/add-image", productId: id, status: 201, imageId: result.rows[0].id });
     return res.status(201).json({ success: true, message: "Image added", image: formatImage(result.rows[0]) });
   } catch (err) {
-    console.error({ route: "POST /api/products/add-image", productId: id, status: 500, error: err.message });
-    return res.status(500).json({ success: false, message: "Internal server error" });
+    const isSupabaseError = err.message && err.message.includes("Storage upload failed");
+    const statusCode = isSupabaseError ? 502 : 500;
+    const msg = isSupabaseError ? err.message : "Internal server error";
+    console.error({ route: "POST /api/products/add-image", productId: id, status: statusCode, error: err.message });
+    return res.status(statusCode).json({ success: false, message: msg });
   }
 }
 
@@ -831,8 +849,11 @@ async function addImages(req, res) {
     console.log({ route: "POST /api/products/add-images", productId: id, status: 201, count: insertedImages.length });
     return res.status(201).json({ success: true, message: `${insertedImages.length} image(s) added`, images: insertedImages });
   } catch (err) {
-    console.error({ route: "POST /api/products/add-images", productId: id, status: 500, error: err.message });
-    return res.status(500).json({ success: false, message: "Internal server error" });
+    const isSupabaseError = err.message && err.message.includes("Storage upload failed");
+    const statusCode = isSupabaseError ? 502 : 500;
+    const msg = isSupabaseError ? err.message : "Internal server error";
+    console.error({ route: "POST /api/products/add-images", productId: id, status: statusCode, error: err.message });
+    return res.status(statusCode).json({ success: false, message: msg });
   }
 }
 

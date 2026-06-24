@@ -6,6 +6,7 @@ const db = require("../config/db.js");
 //                           created_at, updated_at
 
 const num = (v) => parseFloat(v) || 0;
+const isTrue = (val) => val === true || val === "true" || val === 1 || val === "1" || val === "yes";
 
 // ==================================================================
 // ADMIN — GET /api/inventory
@@ -149,7 +150,7 @@ async function updateStock(req, res) {
     return res.status(400).json({ success: false, message: "Nothing to update" });
   }
 
-  const stockVal = inStock !== undefined ? (inStock ? 1 : 0) : (stockQty !== undefined ? (parseInt(stockQty) > 0 ? 1 : 0) : undefined);
+  const stockVal = inStock !== undefined ? (isTrue(inStock) ? 1 : 0) : (stockQty !== undefined ? (parseInt(stockQty) > 0 ? 1 : 0) : undefined);
 
   try {
     const result = await db.query(
@@ -221,7 +222,7 @@ async function bulkUpdateStock(req, res) {
     const results = [];
     for (const item of updates) {
       if (!item.variantId) continue;
-      const stockVal = item.inStock !== undefined ? (item.inStock ? 1 : 0) : (item.stockQty !== undefined ? (parseInt(item.stockQty) > 0 ? 1 : 0) : null);
+      const stockVal = item.inStock !== undefined ? (isTrue(item.inStock) ? 1 : 0) : (item.stockQty !== undefined ? (parseInt(item.stockQty) > 0 ? 1 : 0) : null);
       const r = await client.query(
         `UPDATE product_variants SET
            stock_qty     = COALESCE($1, stock_qty),
