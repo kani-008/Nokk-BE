@@ -31,7 +31,7 @@ async function fetchCart(userId) {
        pv.weight_grams,
        pv.price,
        pv.compare_price,
-       pv.stock_qty,
+       (pv.stock_qty > 0) AS in_stock,
        p.id            AS product_id,
        p.name_en,
        p.name_ta,
@@ -56,7 +56,7 @@ async function fetchCart(userId) {
     weightGrams: r.weight_grams,
     price: parseFloat(r.price),
     comparePrice: r.compare_price ? parseFloat(r.compare_price) : null,
-    stockQty: parseInt(r.stock_qty),
+    inStock: r.in_stock,
     productId: r.product_id,
     name: r.name_ta ? `${r.name_en} (${r.name_ta})` : r.name_en,
     nameEn: r.name_en,
@@ -127,11 +127,11 @@ async function addToCart(req, res) {
       ? existing.rows[0].quantity + quantity
       : quantity;
 
-    if (newQty > varRes.rows[0].stock_qty) {
-      console.log({ route: "POST /api/cart", userId: req.user.id, status: 400, message: "insufficient stock" });
+    if (varRes.rows[0].stock_qty <= 0) {
+      console.log({ route: "POST /api/cart", userId: req.user.id, status: 400, message: "item out of stock" });
       return res.status(400).json({
         success: false,
-        message: `Only ${varRes.rows[0].stock_qty} units available in stock`
+        message: "Item is out of stock"
       });
     }
 
@@ -187,11 +187,11 @@ async function updateCartItem(req, res) {
     if (quantity === 0) {
       await db.query("DELETE FROM cart_items WHERE id = $1", [itemId]);
     } else {
-      if (quantity > itemRes.rows[0].stock_qty) {
-        console.log({ route: "PUT /api/cart/update-item", userId: req.user.id, itemId, status: 400, message: "insufficient stock" });
+      if (itemRes.rows[0].stock_qty <= 0) {
+        console.log({ route: "PUT /api/cart/update-item", userId: req.user.id, itemId, status: 400, message: "item out of stock" });
         return res.status(400).json({
           success: false,
-          message: `Only ${itemRes.rows[0].stock_qty} units available in stock`
+          message: "Item is out of stock"
         });
       }
       await db.query(

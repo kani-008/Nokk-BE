@@ -148,7 +148,7 @@ async function checkout(req, res) {
     await client.query("BEGIN");
 
     // Lock variants, validate stock, and collect IDs in one pass.
-    // FOR UPDATE prevents two simultaneous checkouts overselling the same variant.
+    // FOR UPDATE prevents concurrent updates.
     const resolvedVariants = [];
     for (const item of items) {
       const varRes = await client.query(
@@ -160,21 +160,15 @@ async function checkout(req, res) {
         e.status = 400;
         throw e;
       }
-      if (varRes.rows[0].stock_qty < item.quantity) {
-        const e = new Error(`Insufficient stock for ${item.nameEn} (${item.weight}). Available: ${varRes.rows[0].stock_qty}`);
+      if (varRes.rows[0].stock_qty <= 0) {
+        const e = new Error(`Product variant ${item.nameEn} (${item.weight}) is out of stock`);
         e.status = 400;
         throw e;
       }
       resolvedVariants.push(varRes.rows[0].id);
     }
 
-    // Deduct stock using the variant IDs already known from the lock step
-    for (let i = 0; i < items.length; i++) {
-      await client.query(
-        "UPDATE product_variants SET stock_qty = stock_qty - $1, updated_at = NOW() WHERE id = $2",
-        [items[i].quantity, resolvedVariants[i]]
-      );
-    }
+    // Deduct stock is removed since stock_qty stays fixed as a binary availability flag (0 or 1)
 
     const orderId = await generateOrderId((sql, params) => client.query(sql, params));
     const paymentStatus = paymentMethod.toLowerCase().includes("cod") ? "pending" : "paid";
@@ -353,19 +347,7 @@ async function cancelMyOrder(req, res) {
       [id]
     );
 
-    // Restore stock
-    const itemsRes = await client.query(
-      "SELECT variant_id, quantity FROM order_items WHERE order_id = $1",
-      [id]
-    );
-    for (const item of itemsRes.rows) {
-      if (item.variant_id) {
-        await client.query(
-          "UPDATE product_variants SET stock_qty = stock_qty + $1, updated_at = NOW() WHERE id = $2",
-          [item.quantity, item.variant_id]
-        );
-      }
-    }
+
 
     await client.query(
       "INSERT INTO order_timelines (order_id, status, notes) VALUES ($1,'cancelled','Order cancelled by customer.')",
@@ -575,21 +557,7 @@ async function adminUpdateStatus(req, res) {
       [status, courierName || null, trackingNumber || null, trackingUrl || null, id]
     );
 
-    // Restore stock if admin is cancelling an active order
-    if (currentStatus !== "cancelled" && status === "cancelled") {
-      const itemsRes = await client.query(
-        "SELECT variant_id, quantity FROM order_items WHERE order_id = $1",
-        [id]
-      );
-      for (const item of itemsRes.rows) {
-        if (item.variant_id) {
-          await client.query(
-            "UPDATE product_variants SET stock_qty = stock_qty + $1, updated_at = NOW() WHERE id = $2",
-            [item.quantity, item.variant_id]
-          );
-        }
-      }
-    }
+
 
     await client.query(
       "INSERT INTO order_timelines (order_id, status, notes) VALUES ($1,$2,$3)",
@@ -679,21 +647,7 @@ async function adminUpdateReturn(req, res) {
       completed: `Return completed. Refund processed. Notes: ${adminNotes || "None"}`
     }[status];
 
-    // Restore stock on completion
-    if (status === "completed") {
-      const itemsRes = await client.query(
-        "SELECT variant_id, quantity FROM order_items WHERE order_id = $1",
-        [ret.order_id]
-      );
-      for (const item of itemsRes.rows) {
-        if (item.variant_id) {
-          await client.query(
-            "UPDATE product_variants SET stock_qty = stock_qty + $1, updated_at = NOW() WHERE id = $2",
-            [item.quantity, item.variant_id]
-          );
-        }
-      }
-    }
+
 
     await client.query(
       "UPDATE orders SET status = $1, updated_at = NOW() WHERE id = $2",

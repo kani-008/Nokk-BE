@@ -323,8 +323,8 @@ async function getInventoryReport(req, res) {
   console.log({ route: "GET /api/reports/inventory", category: catSlug, stockStatus, status: "fetching inventory report" });
 
   const statusFilter = {
-    "in_stock": "pv.stock_qty > 10",
-    "low_stock": "pv.stock_qty > 0 AND pv.stock_qty <= 10",
+    "in_stock": "pv.stock_qty > 0",
+    "low_stock": "FALSE",
     "out_of_stock": "pv.stock_qty = 0"
   }[stockStatus] || "TRUE";
 
@@ -342,7 +342,6 @@ async function getInventoryReport(req, res) {
          pv.stock_qty * pv.price AS stock_value,
          CASE
            WHEN pv.stock_qty = 0         THEN 'out_of_stock'
-           WHEN pv.stock_qty <= 10       THEN 'low_stock'
            ELSE                               'in_stock'
          END               AS stock_status,
          pv.updated_at     AS stock_updated_at
@@ -352,19 +351,18 @@ async function getInventoryReport(req, res) {
        WHERE pv.is_active = TRUE
          AND ($1::text IS NULL OR c.slug = $1)
          AND ${statusFilter}
-       ORDER BY pv.stock_qty ASC, p.name_en ASC`,
+       ORDER BY pv.stock_qty DESC, p.name_en ASC`,
       [catSlug]
     );
 
     const summary = await db.query(
       `SELECT
          COUNT(*)                                          AS total_variants,
-         COALESCE(SUM(pv.stock_qty), 0)                  AS total_units,
+         COUNT(*) FILTER (WHERE pv.stock_qty > 0)         AS total_units,
          COALESCE(SUM(pv.stock_qty * pv.price), 0)       AS total_stock_value,
          COUNT(*) FILTER (WHERE pv.stock_qty  = 0)        AS out_of_stock,
-         COUNT(*) FILTER (WHERE pv.stock_qty  > 0
-                            AND pv.stock_qty <= 10)       AS low_stock,
-         COUNT(*) FILTER (WHERE pv.stock_qty  > 10)       AS in_stock
+         0                                                 AS low_stock,
+         COUNT(*) FILTER (WHERE pv.stock_qty  > 0)         AS in_stock
        FROM product_variants pv
        WHERE pv.is_active = TRUE`
     );

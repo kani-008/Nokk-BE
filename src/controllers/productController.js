@@ -25,10 +25,13 @@ function formatProduct(p, variants = [], images = [], reviews = []) {
     isNew: p.is_new,
     isActive: p.is_active,
     // Computed from variants
-    minPrice: num(p.min_price ?? variants.reduce((m, v) => Math.min(m, v.price), Infinity)),
-    minComparePrice: num(p.min_compare_price ?? variants.reduce((m, v) => Math.min(m, v.comparePrice ?? Infinity), Infinity)),
-    totalStock: parseInt(p.total_stock ?? variants.reduce((s, v) => s + v.stockQty, 0)),
-    inStock: (parseInt(p.total_stock ?? variants.reduce((s, v) => s + v.stockQty, 0))) > 0,
+    minPrice: num(p.min_price ?? (variants.length ? Math.min(...variants.map(v => v.price)) : Infinity)),
+    minComparePrice: num(p.min_compare_price ?? (variants.length ? Math.min(...variants.map(v => v.comparePrice || Infinity)) : Infinity)),
+    inStock: p.in_stock !== undefined
+      ? p.in_stock
+      : (p.total_stock !== undefined
+          ? parseInt(p.total_stock) > 0
+          : (variants.length > 0 ? variants.some(v => v.inStock) : false)),
     avgRating: num(p.avg_rating ?? 0),
     reviewCount: parseInt(p.review_count ?? 0),
     primaryImage: p.primary_image || (images.find(i => i.isPrimary)?.imageUrl) || null,
@@ -49,6 +52,10 @@ function formatVariant(v) {
     price: num(v.price),
     comparePrice: num(v.compare_price),
     stockQty: parseInt(v.stock_qty),
+    // Customer-facing UI should only ever read this boolean, never
+    // stockQty directly — keeps the "no exact numbers" rule enforced
+    // at the API boundary, not just by convention in each component.
+    inStock: v.in_stock !== undefined ? v.in_stock : parseInt(v.stock_qty) > 0,
     isActive: v.is_active,
     createdAt: v.created_at,
     updatedAt: v.updated_at
@@ -283,11 +290,12 @@ async function createProduct(req, res) {
     // Insert variants
     for (const v of variants) {
       if (!v.weightLabel || !v.price) continue;
+      const stockVal = v.inStock !== undefined ? (v.inStock ? 1 : 0) : (v.stockQty !== undefined ? (parseInt(v.stockQty) > 0 ? 1 : 0) : 1);
       await client.query(
         `INSERT INTO product_variants
            (product_id, weight_grams, weight_label, price, compare_price, stock_qty, is_active)
          VALUES ($1,$2,$3,$4,$5,$6,TRUE)`,
-        [product.id, v.weightGrams || 0, v.weightLabel, v.price, v.comparePrice || null, v.stockQty || 0]
+        [product.id, v.weightGrams || 0, v.weightLabel, v.price, v.comparePrice || null, stockVal]
       );
     }
 
@@ -429,6 +437,7 @@ async function updateProduct(req, res) {
       // Upsert incoming variants
       for (const v of req.body.variants) {
         if (!v.weightLabel || !v.price) continue;
+        const stockVal = v.inStock !== undefined ? (v.inStock ? 1 : 0) : (v.stockQty !== undefined ? (parseInt(v.stockQty) > 0 ? 1 : 0) : undefined);
         if (v.id && currentVarIds.includes(v.id)) {
           // Update
           await client.query(
@@ -446,7 +455,7 @@ async function updateProduct(req, res) {
               v.weightLabel || null,
               v.price !== undefined ? v.price : null,
               v.comparePrice !== undefined ? v.comparePrice : null,
-              v.stockQty !== undefined ? v.stockQty : null,
+              stockVal !== undefined ? stockVal : null,
               v.isActive !== undefined ? v.isActive : null,
               v.id,
               id
@@ -464,7 +473,7 @@ async function updateProduct(req, res) {
               v.weightLabel,
               v.price,
               v.comparePrice || null,
-              v.stockQty || 0,
+              stockVal !== undefined ? stockVal : 1,
               v.isActive !== undefined ? v.isActive : true
             ]
           );
@@ -605,20 +614,21 @@ async function deleteProduct(req, res) {
 // Add a variant to an existing product.
 // ==================================================================
 async function addVariant(req, res) {
-  const { productId: id, weightGrams, weightLabel, price, comparePrice, stockQty } = req.body;
-  console.log({ route: "POST /api/products/add-variant", productId: id, body: { weightGrams, weightLabel, price, comparePrice, stockQty }, status: "adding variant" });
+  const { productId: id, weightGrams, weightLabel, price, comparePrice, stockQty, inStock } = req.body;
+  console.log({ route: "POST /api/products/add-variant", productId: id, body: { weightGrams, weightLabel, price, comparePrice, stockQty, inStock }, status: "adding variant" });
 
   if (!weightLabel || !price) {
     console.log({ route: "POST /api/products/add-variant", productId: id, status: 400, message: "missing fields" });
     return res.status(400).json({ success: false, message: "weightLabel and price are required" });
   }
+  const stockVal = inStock !== undefined ? (inStock ? 1 : 0) : (stockQty !== undefined ? (parseInt(stockQty) > 0 ? 1 : 0) : 1);
   try {
     const result = await db.query(
       `INSERT INTO product_variants
          (product_id, weight_grams, weight_label, price, compare_price, stock_qty, is_active)
        VALUES ($1,$2,$3,$4,$5,$6,TRUE)
        RETURNING *`,
-      [id, weightGrams || 0, weightLabel, price, comparePrice || null, stockQty || 0]
+      [id, weightGrams || 0, weightLabel, price, comparePrice || null, stockVal]
     );
     console.log({ route: "POST /api/products/add-variant", productId: id, status: 201, variantId: result.rows[0].id });
     return res.status(201).json({ success: true, message: "Variant added", variant: formatVariant(result.rows[0]) });
@@ -633,9 +643,10 @@ async function addVariant(req, res) {
 // Update price / stock / comparePrice / isActive on a variant.
 // ==================================================================
 async function updateVariant(req, res) {
-  const { productId: id, variantId, weightGrams, weightLabel, price, comparePrice, stockQty, isActive } = req.body;
-  console.log({ route: "PUT /api/products/update-variant", productId: id, variantId, body: { weightGrams, weightLabel, price, comparePrice, stockQty, isActive }, status: "updating variant" });
+  const { productId: id, variantId, weightGrams, weightLabel, price, comparePrice, stockQty, inStock, isActive } = req.body;
+  console.log({ route: "PUT /api/products/update-variant", productId: id, variantId, body: { weightGrams, weightLabel, price, comparePrice, stockQty, inStock, isActive }, status: "updating variant" });
 
+  const stockVal = inStock !== undefined ? (inStock ? 1 : 0) : (stockQty !== undefined ? (parseInt(stockQty) > 0 ? 1 : 0) : undefined);
   try {
     const result = await db.query(
       `UPDATE product_variants SET
@@ -653,7 +664,7 @@ async function updateVariant(req, res) {
         weightLabel || null,
         price !== undefined ? price : null,
         comparePrice !== undefined ? comparePrice : null,
-        stockQty !== undefined ? stockQty : null,
+        stockVal !== undefined ? stockVal : null,
         isActive !== undefined ? isActive : null,
         variantId,
         id

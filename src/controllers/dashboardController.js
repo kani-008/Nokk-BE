@@ -52,12 +52,6 @@ async function getSummary(req, res) {
       WHERE role = 'customer'
     `);
 
-    const lowStock = await db.query(`
-      SELECT COUNT(*) AS low_stock_count
-      FROM product_variants
-      WHERE is_active = TRUE AND stock_qty <= 10
-    `);
-
     const pendingReturns = await db.query(`
       SELECT COUNT(*) AS pending_returns
       FROM return_requests
@@ -103,7 +97,7 @@ async function getSummary(req, res) {
           monthNew: parseInt(c.month_new)
         },
         alerts: {
-          lowStockVariants: parseInt(lowStock.rows[0].low_stock_count),
+          lowStockVariants: 0,
           pendingReturns: parseInt(pendingReturns.rows[0].pending_returns)
         }
       }
@@ -256,9 +250,13 @@ async function getTopCustomers(req, res) {
 // GET /api/dashboard/low-stock?limit=20
 // Variants running low on stock (stock_qty <= 10).
 // ==================================================================
-async function getLowStock(req, res) {
+// ==================================================================
+// GET /api/dashboard/out-of-stock?limit=20
+// Variants out of stock (stock_qty = 0).
+// ==================================================================
+async function getOutOfStock(req, res) {
   const limit = Math.min(parseInt(req.query.limit) || 20, 100);
-  console.log({ route: "GET /api/dashboard/low-stock", limit, status: "fetching low stock variants" });
+  console.log({ route: "GET /api/dashboard/out-of-stock", limit, status: "fetching out of stock variants" });
 
   try {
     const result = await db.query(`
@@ -271,15 +269,15 @@ async function getLowStock(req, res) {
         pv.stock_qty
       FROM product_variants pv
       JOIN products p ON p.id = pv.product_id
-      WHERE pv.is_active = TRUE AND pv.stock_qty <= 10
-      ORDER BY pv.stock_qty ASC
+      WHERE pv.is_active = TRUE AND pv.stock_qty = 0
+      ORDER BY p.name_en ASC
       LIMIT $1
     `, [limit]);
 
-    console.log({ route: "GET /api/dashboard/low-stock", limit, status: 200, count: result.rows.length });
+    console.log({ route: "GET /api/dashboard/out-of-stock", limit, status: 200, count: result.rows.length });
     return res.json({
       success: true,
-      lowStock: result.rows.map(r => ({
+      outOfStock: result.rows.map(r => ({
         variantId: r.variant_id,
         productId: r.product_id,
         name: r.name_ta ? `${r.name_en} (${r.name_ta})` : r.name_en,
@@ -288,7 +286,7 @@ async function getLowStock(req, res) {
       }))
     });
   } catch (err) {
-    console.error({ route: "GET /api/dashboard/low-stock", limit, status: 500, error: err.message });
+    console.error({ route: "GET /api/dashboard/out-of-stock", limit, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -420,7 +418,7 @@ module.exports = {
   getRevenueChart,
   getTopProducts,
   getTopCustomers,
-  getLowStock,
+  getOutOfStock,
   getRecentOrders,
   getSalesByCategory,
   getReturnRequests

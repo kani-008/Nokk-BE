@@ -17,7 +17,7 @@ async function fetchWishlist(userId) {
        pi.image_url          AS primary_image,
        COALESCE(MIN(pv.price), 0)         AS min_price,
        COALESCE(MIN(pv.compare_price), 0) AS min_compare_price,
-       COALESCE(SUM(pv.stock_qty), 0)     AS total_stock
+       COALESCE(BOOL_OR(pv.stock_qty > 0), FALSE) AS in_stock
      FROM wishlists w
      JOIN products p ON p.id = w.product_id
      LEFT JOIN product_images pi
@@ -40,8 +40,7 @@ async function fetchWishlist(userId) {
     primaryImage:    r.primary_image,
     minPrice:        parseFloat(r.min_price),
     minComparePrice: parseFloat(r.min_compare_price),
-    totalStock:      parseInt(r.total_stock),
-    inStock:         parseInt(r.total_stock) > 0,
+    inStock:         r.in_stock,
     isBestseller:    r.is_bestseller,
     isNew:           r.is_new,
     addedAt:         r.created_at

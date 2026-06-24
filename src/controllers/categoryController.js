@@ -61,7 +61,7 @@ async function getCategoryBySlug(req, res) {
               pi.image_url AS primary_image,
               COALESCE(MIN(pv.price), 0)          AS min_price,
               COALESCE(MIN(pv.compare_price), 0)  AS min_compare_price,
-              COALESCE(SUM(pv.stock_qty), 0)      AS total_stock
+              COALESCE(BOOL_OR(pv.stock_qty > 0), FALSE) AS in_stock
        FROM products p
        LEFT JOIN product_images pi  ON pi.product_id = p.id AND pi.is_primary = TRUE
        LEFT JOIN product_variants pv ON pv.product_id = p.id AND pv.is_active = TRUE
@@ -84,8 +84,7 @@ async function getCategoryBySlug(req, res) {
         primaryImage: p.primary_image,
         minPrice: parseFloat(p.min_price),
         minComparePrice: parseFloat(p.min_compare_price),
-        totalStock: parseInt(p.total_stock),
-        inStock: parseInt(p.total_stock) > 0,
+        inStock: p.in_stock,
         isBestseller: p.is_bestseller,
         isNew: p.is_new
       }))

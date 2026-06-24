@@ -18,11 +18,11 @@ async function getInventory(req, res) {
   const page = Math.max(parseInt(req.query.page) || 1, 1);
   const limit = Math.min(parseInt(req.query.limit) || 50, 200);
   const offset = (page - 1) * limit;
-  const lowStock = req.query.lowStock === "true";
+  const lowStock = false; // Low stock concept is removed system-wide
   const outOfStock = req.query.outOfStock === "true";
   const catSlug = req.query.category || null;
   const search = req.query.search || null;
-  console.log({ route: "GET /api/inventory", query: { page, limit, lowStock, outOfStock, catSlug, search }, status: "fetching inventory" });
+  console.log({ route: "GET /api/inventory", query: { page, limit, outOfStock, catSlug, search }, status: "fetching inventory" });
 
   try {
     const result = await db.query(
@@ -89,8 +89,7 @@ async function getInventory(req, res) {
         comparePrice: r.compare_price ? num(r.compare_price) : null,
         stockQty: parseInt(r.stock_qty),
         isActive: r.is_active,
-        stockStatus: parseInt(r.stock_qty) === 0 ? "out_of_stock"
-          : parseInt(r.stock_qty) <= 10 ? "low_stock" : "in_stock",
+        stockStatus: parseInt(r.stock_qty) === 0 ? "out_of_stock" : "in_stock",
         stockUpdatedAt: r.stock_updated_at,
         productId: r.product_id,
         name: r.name_ta ? `${r.name_en} (${r.name_ta})` : r.name_en,
@@ -120,10 +119,9 @@ async function getInventorySummary(req, res) {
       `SELECT
          COUNT(*)                                           AS total_variants,
          COUNT(*) FILTER (WHERE pv.stock_qty  = 0)         AS out_of_stock,
-         COUNT(*) FILTER (WHERE pv.stock_qty  > 0
-                            AND pv.stock_qty <= 10)        AS low_stock,
-         COUNT(*) FILTER (WHERE pv.stock_qty  > 10)        AS in_stock,
-         COALESCE(SUM(pv.stock_qty), 0)                    AS total_units
+         0                                                 AS low_stock,
+         COUNT(*) FILTER (WHERE pv.stock_qty  > 0)         AS in_stock,
+         COUNT(*) FILTER (WHERE pv.stock_qty  > 0)         AS total_units
        FROM product_variants pv
        WHERE pv.is_active = TRUE`
     );
@@ -142,18 +140,16 @@ async function getInventorySummary(req, res) {
 // This is the main "update stock" action from the inventory page.
 // ==================================================================
 async function updateStock(req, res) {
-  const { variantId, stockQty, price, comparePrice, isActive } = req.body;
-  console.log({ route: "PUT /api/inventory/update-stock", variantId, body: { stockQty, price, comparePrice, isActive }, status: "updating variant stock" });
+  const { variantId, stockQty, inStock, price, comparePrice, isActive } = req.body;
+  console.log({ route: "PUT /api/inventory/update-stock", variantId, body: { stockQty, inStock, price, comparePrice, isActive }, status: "updating variant stock" });
 
-  if (stockQty === undefined && price === undefined &&
+  if (stockQty === undefined && inStock === undefined && price === undefined &&
     comparePrice === undefined && isActive === undefined) {
     console.log({ route: "PUT /api/inventory/update-stock", variantId, status: 400, message: "Nothing to update" });
     return res.status(400).json({ success: false, message: "Nothing to update" });
   }
-  if (stockQty !== undefined && (isNaN(stockQty) || stockQty < 0)) {
-    console.log({ route: "PUT /api/inventory/update-stock", variantId, status: 400, message: "stockQty must be 0 or more" });
-    return res.status(400).json({ success: false, message: "stockQty must be 0 or more" });
-  }
+
+  const stockVal = inStock !== undefined ? (inStock ? 1 : 0) : (stockQty !== undefined ? (parseInt(stockQty) > 0 ? 1 : 0) : undefined);
 
   try {
     const result = await db.query(
@@ -166,7 +162,7 @@ async function updateStock(req, res) {
        WHERE id = $5
        RETURNING id, product_id, weight_label, stock_qty, price, compare_price, is_active, updated_at`,
       [
-        stockQty !== undefined ? parseInt(stockQty) : null,
+        stockVal !== undefined ? stockVal : null,
         price !== undefined ? num(price) : null,
         comparePrice !== undefined ? num(comparePrice) : null,
         isActive !== undefined ? isActive : null,
@@ -187,6 +183,7 @@ async function updateStock(req, res) {
         productId: v.product_id,
         weightLabel: v.weight_label,
         stockQty: parseInt(v.stock_qty),
+        inStock: parseInt(v.stock_qty) > 0,
         price: num(v.price),
         comparePrice: v.compare_price ? num(v.compare_price) : null,
         isActive: v.is_active,
@@ -224,6 +221,7 @@ async function bulkUpdateStock(req, res) {
     const results = [];
     for (const item of updates) {
       if (!item.variantId) continue;
+      const stockVal = item.inStock !== undefined ? (item.inStock ? 1 : 0) : (item.stockQty !== undefined ? (parseInt(item.stockQty) > 0 ? 1 : 0) : null);
       const r = await client.query(
         `UPDATE product_variants SET
            stock_qty     = COALESCE($1, stock_qty),
@@ -233,7 +231,7 @@ async function bulkUpdateStock(req, res) {
          WHERE id = $4
          RETURNING id, weight_label, stock_qty, price`,
         [
-          item.stockQty !== undefined ? parseInt(item.stockQty) : null,
+          stockVal,
           item.price !== undefined ? num(item.price) : null,
           item.comparePrice !== undefined ? num(item.comparePrice) : null,
           item.variantId

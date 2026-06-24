@@ -1,5 +1,5 @@
 const multer = require("multer");
-const { uploadToSupabase } = require("../config/supabase.js");
+const { uploadToSupabase, deleteFromSupabase } = require("../config/supabase.js");
 
 const BANNER_TYPES = new Set([
   "video/mp4", "video/webm", "video/ogg",
@@ -83,4 +83,27 @@ async function uploadProductImage(req, res) {
   }
 }
 
-module.exports = { upload, uploadProduct, uploadBannerFile, uploadProductImage };
+// ==================================================================
+// ADMIN — DELETE /api/upload/delete-file
+// Body: { url }
+// Delete file from Supabase storage directly.
+// ==================================================================
+async function deleteUploadedFile(req, res) {
+  const { url } = req.body;
+  console.log({ route: "DELETE /api/upload/delete-file", url });
+
+  if (!url) {
+    return res.status(400).json({ success: false, message: "url is required" });
+  }
+
+  try {
+    await deleteFromSupabase(url);
+    console.log({ route: "DELETE /api/upload/delete-file", status: 200, url });
+    return res.status(200).json({ success: true, message: "File deleted successfully" });
+  } catch (err) {
+    console.error({ route: "DELETE /api/upload/delete-file", status: 500, error: err.message });
+    return res.status(500).json({ success: false, message: err.message });
+  }
+}
+
+module.exports = { upload, uploadProduct, uploadBannerFile, uploadProductImage, deleteUploadedFile };

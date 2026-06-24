@@ -6,7 +6,7 @@ const {
   getRevenueChart,
   getTopProducts,
   getTopCustomers,
-  getLowStock,
+  getOutOfStock,
   getRecentOrders,
   getSalesByCategory,
   getReturnRequests,
@@ -31,8 +31,8 @@ router.get("/top-products", getTopProducts);
 // Top customers by spend        ?limit=10
 router.get("/top-customers", getTopCustomers);
 
-// Low stock variants            ?limit=20
-router.get("/low-stock", getLowStock);
+// Out of stock variants          ?limit=20
+router.get("/out-of-stock", getOutOfStock);
 
 // Recent orders feed            ?limit=10
 router.get("/recent-orders", getRecentOrders);
