@@ -1,4 +1,5 @@
 const db = require("../config/db.js");
+const { createNotification } = require("./notificationController.js");
 
 // ------------------------------------------------------------------
 // Helpers
@@ -228,6 +229,16 @@ async function checkout(req, res) {
 
     await client.query("COMMIT");
 
+    createNotification({
+      eventType: "new_order",
+      priority: "high",
+      title: "New Order Received",
+      message: `${address.fullName} placed order ${orderId} for ₹${total}`,
+      entityType: "orders",
+      entityId: orderId,
+      link: `/admin/orders/${orderId}`,
+    });
+
     const { items: fmtItems, timeline } = await fetchItemsAndTimeline(orderId);
     const orderRow = await db.query("SELECT * FROM orders WHERE id = $1", [orderId]);
     console.log({ route: "POST /api/orders/checkout", userId: req.user.id, orderId, status: 201 });
@@ -419,6 +430,17 @@ async function requestReturn(req, res) {
     );
 
     await client.query("COMMIT");
+
+    createNotification({
+      eventType: "return_requested",
+      priority: "high",
+      title: "Return Requested",
+      message: `Customer requested return for order ${id}. Reason: ${reason}`,
+      entityType: "orders",
+      entityId: id,
+      link: `/admin/orders/${id}`,
+    });
+
     console.log({ route: "POST /api/orders/request-return", userId: req.user.id, orderId: id, status: 200 });
     return res.json({ success: true, message: "Return request submitted successfully" });
   } catch (err) {
@@ -565,6 +587,17 @@ async function adminUpdateStatus(req, res) {
     );
 
     await client.query("COMMIT");
+
+    createNotification({
+      eventType: "order_status_changed",
+      priority: "normal",
+      title: "Order Status Updated",
+      message: `Order ${id} moved from ${currentStatus} → ${status}`,
+      entityType: "orders",
+      entityId: id,
+      link: `/admin/orders/${id}`,
+    });
+
     console.log({ route: "PUT /api/orders/admin/update-status", orderId: id, status: 200 });
     return res.json({ success: true, message: "Order updated successfully" });
   } catch (err) {
