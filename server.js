@@ -1,5 +1,6 @@
 const express = require("express");
 const cors = require("cors");
+const helmet = require("helmet");
 const os = require("os");
 
 require("dotenv").config();
@@ -27,12 +28,37 @@ const notificationRoute = require("./src/routes/notificationRoute.js");
 
 const app = express();
 const PORT = process.env.PORT || 5000;
-const HOST = "0.0.0.0"; // bind to all interfaces so phones on the same Wi-Fi can reach it
+const HOST = "0.0.0.0"; // bind to all interfaces so LAN devices can reach it
 
-// ── Global middleware ─────────────────────────────────────────────
-app.use(cors()); // dev: allow all origins (phone LAN origin included)
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+// Trust the first proxy hop so rate-limiter sees real client IPs behind nginx/LB
+app.set("trust proxy", 1);
+
+// ── Security headers (helmet) ─────────────────────────────────────
+app.use(
+  helmet({
+    crossOriginResourcePolicy: { policy: "cross-origin" }, // allow image embeds from FE origin
+  }),
+);
+
+// ── CORS ──────────────────────────────────────────────────────────
+const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(",").map((o) => o.trim())
+  : ["http://localhost:5173", "http://localhost:4173"]; // vite dev + preview
+
+app.use(
+  cors({
+    origin: (origin, cb) => {
+      // allow server-to-server / curl (no Origin header) and allowed list
+      if (!origin || ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
+      cb(new Error(`CORS: origin '${origin}' not allowed`));
+    },
+    credentials: true,
+  }),
+);
+
+// ── Body parsers with size caps ───────────────────────────────────
+app.use(express.json({ limit: "50kb" }));
+app.use(express.urlencoded({ extended: true, limit: "50kb" }));
 
 // ── Health check ──────────────────────────────────────────────────
 app.get("/", (req, res) => {
@@ -51,15 +77,15 @@ app.use("/api/categories", categoryRoute); // public list | CRUD (admin)
 app.use("/api/products", productRoute); // public list | CRUD + variants + images (admin)
 app.use("/api/cart", cartRoute); // add, update, remove, clear (login required)
 app.use("/api/wishlist", wishlistRoute); // add, remove, clear (login required)
-app.use("/api/banners",   bannerRoute);    // public active | CRUD (admin)
-app.use("/api/btext",     btextRoute);     // public active by banner | CRUD (admin)
-app.use("/api/coupons",   couponRoute);    // validate (customer) | CRUD (admin)
-app.use("/api/offers",    offersRoute);    // public live | CRUD (admin)
+app.use("/api/banners", bannerRoute); // public active | CRUD (admin)
+app.use("/api/btext", btextRoute); // public active by banner | CRUD (admin)
+app.use("/api/coupons", couponRoute); // validate (customer) | CRUD (admin)
+app.use("/api/offers", offersRoute); // public live | CRUD (admin)
 app.use("/api/inventory", inventoryRoute); // stock management (admin only)
-app.use("/api/settings",  settingsRoute);  // public read | write (admin)
+app.use("/api/settings", settingsRoute); // public read | write (admin)
 app.use("/api/dashboard", dashboardRoute); // KPIs, reports, charts (admin only)
-app.use("/api/reports",   reportRoute);    // exportable reports (admin only)
-app.use("/api/upload",    uploadRoute);    // file upload to Supabase Storage (admin only)
+app.use("/api/reports", reportRoute); // exportable reports (admin only)
+app.use("/api/upload", uploadRoute); // file upload to Supabase Storage (admin only)
 app.use("/api/notifications", notificationRoute); // notifications (customer) | send/manage (admin)
 
 // ── 404 ───────────────────────────────────────────────────────────

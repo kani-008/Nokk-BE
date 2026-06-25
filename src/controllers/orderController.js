@@ -140,6 +140,12 @@ async function checkout(req, res) {
     console.log({ route: "POST /api/orders/checkout", userId: req.user.id, status: 400, message: "items, address and paymentMethod are required" });
     return res.status(400).json({ success: false, message: "items, address and paymentMethod are required" });
   }
+  if (!Array.isArray(items) || items.length > 50) {
+    return res.status(400).json({ success: false, message: "Invalid items" });
+  }
+  if (!["cod", "upi"].includes(paymentMethod)) {
+    return res.status(400).json({ success: false, message: "Invalid payment method" });
+  }
   if (!address.fullName || !address.phone || !address.addressLine1 || !address.city || !address.pincode) {
     console.log({ route: "POST /api/orders/checkout", userId: req.user.id, status: 400, message: "incomplete address" });
     return res.status(400).json({ success: false, message: "Incomplete address — fullName, phone, addressLine1, city, pincode required" });
@@ -275,6 +281,9 @@ async function submitUpiReference(req, res) {
   if (!id || !upiRefId || !upiRefId.trim()) {
     console.log({ route: "POST /api/orders/submit-upi-reference", userId: req.user.id, orderId: id, status: 400, message: "id and upiRefId are required" });
     return res.status(400).json({ success: false, message: "id and upiRefId are required" });
+  }
+  if (String(upiRefId).trim().length > 50) {
+    return res.status(400).json({ success: false, message: "Invalid UPI reference ID" });
   }
 
   try {

@@ -286,7 +286,8 @@ async function getAllProducts(req, res) {
   } catch (err) {
     const statusCode = err.status || 500;
     console.error({ route: "GET /api/products", status: statusCode, error: err.message });
-    return res.status(statusCode).json({ success: false, message: err.message });
+    const clientMsg = statusCode === 500 ? "Internal server error" : (err.message || "Internal server error");
+    return res.status(statusCode).json({ success: false, message: clientMsg });
   }
 }
 
@@ -311,7 +312,7 @@ async function getWeightLabels(req, res) {
     });
   } catch (err) {
     console.error({ route: "GET /api/products/weight-labels", error: err.message });
-    return res.status(500).json({ success: false, message: err.message });
+    return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
 

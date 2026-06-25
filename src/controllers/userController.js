@@ -501,6 +501,13 @@ async function addAddress(req, res) {
     console.log({ route: "POST /api/users/me/addresses", userId: req.user?.id, status: 400, message: "Missing required address fields" });
     return res.status(400).json({ success: false, message: "fullName, phone, addressLine1, city and pincode are required" });
   }
+  if (String(fullName).trim().length > 100)    return res.status(400).json({ success: false, message: "Name too long" });
+  if (String(phone).trim().length > 15)         return res.status(400).json({ success: false, message: "Invalid phone number" });
+  if (String(addressLine1).trim().length > 200) return res.status(400).json({ success: false, message: "Address line 1 too long" });
+  if (addressLine2 && String(addressLine2).trim().length > 200) return res.status(400).json({ success: false, message: "Address line 2 too long" });
+  if (String(city).trim().length > 100)         return res.status(400).json({ success: false, message: "City name too long" });
+  if (state && String(state).trim().length > 100) return res.status(400).json({ success: false, message: "State name too long" });
+  if (!/^\d{6}$/.test(String(pincode).trim()))  return res.status(400).json({ success: false, message: "Pincode must be 6 digits" });
 
   try {
     // If this is marked default, clear the current default first

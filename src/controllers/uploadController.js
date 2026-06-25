@@ -108,7 +108,7 @@ async function deleteUploadedFile(req, res) {
     return res.status(200).json({ success: true, message: "File deleted successfully" });
   } catch (err) {
     console.error({ route: "DELETE /api/upload/delete-file", status: 500, error: err.message });
-    return res.status(500).json({ success: false, message: err.message });
+    return res.status(500).json({ success: false, message: "Failed to delete file" });
   }
 }
 

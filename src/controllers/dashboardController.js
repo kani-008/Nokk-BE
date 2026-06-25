@@ -124,12 +124,15 @@ async function getRevenueChart(req, res) {
   const period = req.query.period || "daily";
   console.log({ route: "GET /api/dashboard/revenue-chart", period, status: "fetching chart data" });
 
-  const truncMap = { daily: "day", weekly: "week", monthly: "month" };
-  const trunc = truncMap[period] || "day";
+  const ALLOWED_PERIODS = { daily: "day", weekly: "week", monthly: "month" };
+  const trunc = ALLOWED_PERIODS[period];
+  if (!trunc) {
+    return res.status(400).json({ success: false, message: "period must be daily, weekly, or monthly" });
+  }
 
-  // How far back to look
-  const intervalMap = { daily: "30 days", weekly: "12 weeks", monthly: "12 months" };
-  const interval = intervalMap[period] || "30 days";
+  // Interval rows — kept as integers fed via parameter to avoid any interpolation
+  const intervalDays = { daily: 30, weekly: 84, monthly: 365 }; // 84d ≈ 12 weeks
+  const days = intervalDays[period];
 
   try {
     const result = await db.query(`
@@ -139,11 +142,11 @@ async function getRevenueChart(req, res) {
         COALESCE(SUM(total), 0)      AS revenue,
         COALESCE(SUM(discount), 0)   AS discount
       FROM orders
-      WHERE created_at >= NOW() - INTERVAL '${interval}'
+      WHERE created_at >= NOW() - ($2 || ' days')::interval
         AND status NOT IN ('cancelled')
       GROUP BY date_trunc($1, created_at)
       ORDER BY period ASC
-    `, [trunc]);
+    `, [trunc, days]);
 
     console.log({ route: "GET /api/dashboard/revenue-chart", period, status: 200, count: result.rows.length });
     return res.json({

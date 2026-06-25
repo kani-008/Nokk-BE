@@ -683,6 +683,16 @@ async function register(req, res) {
     status: "registering customer",
   });
 
+  if (fullName && String(fullName).trim().length > 100) {
+    return res.status(400).json({ success: false, message: "Name must be 100 characters or fewer" });
+  }
+  if (phone && String(phone).trim().length > 15) {
+    return res.status(400).json({ success: false, message: "Invalid phone number" });
+  }
+  if (email && String(email).trim().length > 254) {
+    return res.status(400).json({ success: false, message: "Invalid email address" });
+  }
+
   if (!fullName || !password || !phone) {
     console.log({
       route: "POST /register",
@@ -736,34 +746,27 @@ async function register(req, res) {
         });
     }
 
-    /* ───────────── REAL OTP CHECK — uncomment to enable ─────────────
-    if (!otp) {
-      console.log({ route: "POST /register", phone: normalizedPhone, status: 400, message: "otp is required" });
-      return res.status(400).json({ success: false, message: "otp is required" });
+    if (process.env.NODE_ENV === "production") {
+      if (!otp) {
+        console.log({ route: "POST /register", phone: normalizedPhone, status: 400, message: "otp is required" });
+        return res.status(400).json({ success: false, message: "otp is required" });
+      }
+      let check;
+      try {
+        check = await twilioClient.verify.v2.services(VERIFY_SID)
+          .verificationChecks
+          .create({ to: toE164(normalizedPhone), code: String(otp).trim() });
+      } catch (twilioErr) {
+        console.log({ route: "POST /register", phone: normalizedPhone, status: 400, message: "OTP check failed" });
+        return res.status(400).json({ success: false, message: "Invalid or expired OTP" });
+      }
+      if (check.status !== "approved") {
+        console.log({ route: "POST /register", phone: normalizedPhone, status: 400, message: `OTP status: ${check.status}` });
+        return res.status(400).json({ success: false, message: "Invalid or expired OTP" });
+      }
+    } else {
+      console.warn({ route: "POST /register", phone: normalizedPhone, message: "OTP verification SKIPPED (dev mode)" });
     }
-
-    let check;
-    try {
-      check = await twilioClient.verify.v2.services(VERIFY_SID)
-        .verificationChecks
-        .create({ to: toE164(normalizedPhone), code: String(otp).trim() });
-    } catch (twilioErr) {
-      console.log({ route: "POST /register", phone: normalizedPhone, status: 400, message: "OTP check failed: " + twilioErr.message });
-      return res.status(400).json({ success: false, message: "Invalid or expired OTP" });
-    }
-
-    if (check.status !== "approved") {
-      console.log({ route: "POST /register", phone: normalizedPhone, status: 400, message: `OTP status: ${check.status}` });
-      return res.status(400).json({ success: false, message: "Invalid or expired OTP" });
-    }
-    ────────────────────────────────────────────────────────────────── */
-
-    // ⚠️ OTP bypass active — remove this warning once the block above is uncommented
-    console.warn({
-      route: "POST /register",
-      phone: normalizedPhone,
-      message: "OTP verification BYPASSED — dev mode",
-    });
 
     const passwordHash = await bcrypt.hash(password, 10);
     const result = await db.query(
