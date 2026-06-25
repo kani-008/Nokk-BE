@@ -52,11 +52,15 @@ async function getSummary(req, res) {
       WHERE role = 'customer'
     `);
 
-    const pendingReturns = await db.query(`
-      SELECT COUNT(*) AS pending_returns
-      FROM return_requests
+    const pendingReplacements = await db.query(`
+      SELECT COUNT(*) AS pending_replacements
+      FROM replacement_requests
       WHERE status = 'requested'
     `);
+
+    const productsRes = await db.query(
+      `SELECT COUNT(*) AS total_products FROM products WHERE is_active = TRUE`
+    );
 
     const s = stats.rows[0];
     const c = customers.rows[0];
@@ -96,9 +100,12 @@ async function getSummary(req, res) {
           weekNew: parseInt(c.week_new),
           monthNew: parseInt(c.month_new)
         },
+        products: {
+          total: parseInt(productsRes.rows[0].total_products)
+        },
         alerts: {
           lowStockVariants: 0,
-          pendingReturns: parseInt(pendingReturns.rows[0].pending_returns)
+          pendingReplacements: parseInt(pendingReplacements.rows[0].pending_replacements)
         }
       }
     });
@@ -177,7 +184,7 @@ async function getTopProducts(req, res) {
       JOIN products p   ON p.id = oi.product_id
       LEFT JOIN categories c ON c.id = p.category_id
       JOIN orders o     ON o.id = oi.order_id
-      WHERE o.status NOT IN ('cancelled', 'returned')
+      WHERE o.status != 'cancelled' AND o.payment_method != 'replacement'
       GROUP BY p.id, p.name_en, p.name_ta, c.name_en
       ORDER BY revenue DESC
       LIMIT $1
@@ -221,7 +228,7 @@ async function getTopCustomers(req, res) {
         MAX(o.created_at)  AS last_order_at
       FROM users u
       JOIN orders o ON o.user_id = u.id
-      WHERE o.status NOT IN ('cancelled', 'returned')
+      WHERE o.status != 'cancelled' AND o.payment_method != 'replacement'
       GROUP BY u.id, u.full_name, u.email, u.phone
       ORDER BY total_spent DESC
       LIMIT $1
@@ -352,7 +359,7 @@ async function getSalesByCategory(req, res) {
       JOIN products p    ON p.id = oi.product_id
       LEFT JOIN categories c ON c.id = p.category_id
       JOIN orders o      ON o.id = oi.order_id
-      WHERE o.status NOT IN ('cancelled', 'returned')
+      WHERE o.status != 'cancelled' AND o.payment_method != 'replacement'
       GROUP BY c.name_en
       ORDER BY revenue DESC
     `);
@@ -377,10 +384,10 @@ async function getSalesByCategory(req, res) {
 // GET /api/dashboard/return-requests?status=requested
 // Return/refund requests list for the admin.
 // ==================================================================
-async function getReturnRequests(req, res) {
+async function getReplacementRequests(req, res) {
   const status = req.query.status || null;
   const limit = Math.min(parseInt(req.query.limit) || 20, 100);
-  console.log({ route: "GET /api/dashboard/return-requests", status, limit, statusMsg: "fetching return requests" });
+  console.log({ route: "GET /api/dashboard/replacement-requests", status, limit, statusMsg: "fetching replacement requests" });
 
   try {
     const result = await db.query(`
@@ -391,21 +398,22 @@ async function getReturnRequests(req, res) {
         rr.details,
         rr.status,
         rr.admin_notes,
+        rr.new_order_id,
         rr.created_at,
         u.full_name   AS customer_name,
         u.phone       AS customer_phone,
         u.email       AS customer_email
-      FROM return_requests rr
+      FROM replacement_requests rr
       JOIN users u ON u.id = rr.user_id
       WHERE ($1::text IS NULL OR rr.status = $1)
       ORDER BY rr.created_at DESC
       LIMIT $2
     `, [status, limit]);
 
-    console.log({ route: "GET /api/dashboard/return-requests", status, limit, status: 200, count: result.rows.length });
+    console.log({ route: "GET /api/dashboard/replacement-requests", status, limit, status: 200, count: result.rows.length });
     return res.json({
       success: true,
-      returnRequests: result.rows
+      replacementRequests: result.rows
     });
   } catch (err) {
     console.error({ route: "GET /api/dashboard/return-requests", status, limit, status: 500, error: err.message });
@@ -421,5 +429,5 @@ module.exports = {
   getOutOfStock,
   getRecentOrders,
   getSalesByCategory,
-  getReturnRequests
+  getReplacementRequests
 };

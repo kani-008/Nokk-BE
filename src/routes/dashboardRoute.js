@@ -9,7 +9,7 @@ const {
   getOutOfStock,
   getRecentOrders,
   getSalesByCategory,
-  getReturnRequests,
+  getReplacementRequests,
 } = require("../controllers/dashboardController.js");
 
 const authenticate = require("../middleware/auth.js");
@@ -40,7 +40,7 @@ router.get("/recent-orders", getRecentOrders);
 // Revenue by category
 router.get("/sales-by-category", getSalesByCategory);
 
-// Return/refund requests        ?status=requested&limit=20
-router.get("/return-requests", getReturnRequests);
+// Replacement requests           ?status=requested&limit=20
+router.get("/replacement-requests", getReplacementRequests);
 
 module.exports = router;

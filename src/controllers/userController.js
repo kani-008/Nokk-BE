@@ -49,7 +49,7 @@ async function getAllUsers(req, res) {
         COUNT(DISTINCT o.id)   AS order_count,
         COALESCE(SUM(o.total), 0) AS total_spent
       FROM users u
-      LEFT JOIN orders o ON o.user_id = u.id AND o.status NOT IN ('cancelled','returned')
+      LEFT JOIN orders o ON o.user_id = u.id AND o.status != 'cancelled' AND o.payment_method != 'replacement'
       WHERE
         ($1::text IS NULL OR u.role::text   = $1) AND
         ($2::text IS NULL OR u.status::text = $2) AND
@@ -128,10 +128,10 @@ async function getUserById(req, res) {
       [id]
     );
 
-    // Return requests
-    const returnsRes = await db.query(
-      `SELECT id, order_id, reason, details, status, admin_notes, created_at
-       FROM return_requests WHERE user_id = $1 ORDER BY created_at DESC`,
+    // Replacement requests
+    const replacementsRes = await db.query(
+      `SELECT id, order_id, reason, details, status, admin_notes, new_order_id, created_at
+       FROM replacement_requests WHERE user_id = $1 ORDER BY created_at DESC`,
       [id]
     );
 
@@ -159,8 +159,8 @@ async function getUserById(req, res) {
         delivered:   parseInt(s.delivered),
         cancelled:   parseInt(s.cancelled)
       },
-      orders:         ordersRes.rows,
-      returnRequests: returnsRes.rows
+      orders:              ordersRes.rows,
+      replacementRequests: replacementsRes.rows
     });
   } catch (err) {
     console.error({ route: "GET /api/users/get-by-id", adminId: req.user?.id, targetUserId: id, status: 500, error: err.message });

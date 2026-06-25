@@ -14,7 +14,9 @@ const VALID_EVENT_TYPES = [
   "new_order",
   "order_status_changed",
   "payment_failed",
-  "return_requested",
+  "replacement_requested",
+  "replacement_completed",
+  "upi_reference_submitted",
   "new_review",
   "stock_changed",
   "new_signup",
@@ -105,8 +107,8 @@ async function listNotifications(req, res) {
        LEFT JOIN notification_reads nr
          ON nr.notification_id = n.id AND nr.admin_id = $1
        WHERE
-         ($2::text IS NULL OR n.event_type = $2) AND
-         ($3::text IS NULL OR n.priority = $3) AND
+         ($2::text IS NULL OR n.event_type::text = $2) AND
+         ($3::text IS NULL OR n.priority::text   = $3) AND
          (NOT $4 OR nr.read_at IS NULL)
        ORDER BY n.created_at DESC
        LIMIT $5 OFFSET $6`,
@@ -119,8 +121,8 @@ async function listNotifications(req, res) {
        LEFT JOIN notification_reads nr
          ON nr.notification_id = n.id AND nr.admin_id = $1
        WHERE
-         ($2::text IS NULL OR n.event_type = $2) AND
-         ($3::text IS NULL OR n.priority = $3) AND
+         ($2::text IS NULL OR n.event_type::text = $2) AND
+         ($3::text IS NULL OR n.priority::text   = $3) AND
          (NOT $4 OR nr.read_at IS NULL)`,
       [adminId, eventType, priority, unreadOnly]
     );

@@ -143,7 +143,7 @@ async function getRevenueReport(req, res) {
          COALESCE(SUM(discount),        0) AS discount,
          COALESCE(SUM(total),           0) AS revenue
        FROM orders
-       WHERE status NOT IN ('cancelled', 'returned')
+       WHERE status != 'cancelled' AND payment_method != 'replacement'
          ${dateClause}
        GROUP BY date_trunc($1, created_at)
        ORDER BY period ASC`,
@@ -158,7 +158,7 @@ async function getRevenueReport(req, res) {
          COALESCE(SUM(discount),        0) AS total_discount,
          COALESCE(SUM(total),           0) AS total_revenue
        FROM orders
-       WHERE status NOT IN ('cancelled', 'returned')
+       WHERE status != 'cancelled' AND payment_method != 'replacement'
          ${dateClause}`,
       dateParams
     );
@@ -221,7 +221,7 @@ async function getProductReport(req, res) {
        JOIN products p    ON p.id = oi.product_id
        LEFT JOIN categories c ON c.id = p.category_id
        JOIN orders o      ON o.id = oi.order_id
-       WHERE o.status NOT IN ('cancelled', 'returned')
+       WHERE o.status != 'cancelled' AND o.payment_method != 'replacement'
          AND ($1::text IS NULL OR c.slug = $1)
          AND ($2::text IS NULL OR o.payment_status = $2)
          ${dateClause}
@@ -281,7 +281,7 @@ async function getCustomerReport(req, res) {
          MAX(o.created_at)           AS last_order_at
        FROM users u
        LEFT JOIN orders o ON o.user_id = u.id
-         AND o.status NOT IN ('cancelled', 'returned')
+         AND o.status != 'cancelled' AND o.payment_method != 'replacement'
          ${dateClause}
        WHERE u.role = 'customer'
        GROUP BY u.id, u.full_name, u.email, u.phone, u.created_at
