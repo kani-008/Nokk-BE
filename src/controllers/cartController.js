@@ -104,38 +104,38 @@ async function addToCart(req, res) {
   }
 
   try {
-    // Validate variant exists and has enough stock
+    // 1. Validate variant + check stock before touching the cart
     const varRes = await db.query(
-      `SELECT id, stock_qty FROM product_variants
-       WHERE id = $1 AND is_active = TRUE`,
+      `SELECT id, stock_qty FROM product_variants WHERE id = $1 AND is_active = TRUE`,
       [variantId]
     );
     if (varRes.rows.length === 0) {
       console.log({ route: "POST /api/cart", userId: req.user.id, status: 404, message: "Variant not found or inactive" });
       return res.status(404).json({ success: false, message: "Variant not found or inactive" });
     }
+    if (varRes.rows[0].stock_qty <= 0) {
+      console.log({ route: "POST /api/cart", userId: req.user.id, status: 400, message: "item out of stock" });
+      return res.status(400).json({ success: false, message: "Item is out of stock" });
+    }
 
     const cartId = await getOrCreateCart(req.user.id);
 
-    // Check if item already in cart — get current quantity
+    // 2. Check existing qty in cart so we can enforce stock cap
     const existing = await db.query(
       `SELECT id, quantity FROM cart_items WHERE cart_id = $1 AND variant_id = $2`,
       [cartId, variantId]
     );
+    const currentQty = existing.rows.length > 0 ? existing.rows[0].quantity : 0;
+    const newQty = currentQty + quantity;
 
-    const newQty = existing.rows.length > 0
-      ? existing.rows[0].quantity + quantity
-      : quantity;
-
-    if (varRes.rows[0].stock_qty <= 0) {
-      console.log({ route: "POST /api/cart", userId: req.user.id, status: 400, message: "item out of stock" });
+    if (newQty > varRes.rows[0].stock_qty) {
       return res.status(400).json({
         success: false,
-        message: "Item is out of stock"
+        message: `Only ${varRes.rows[0].stock_qty} unit(s) available`
       });
     }
 
-    // Upsert — insert or increment quantity atomically
+    // 3. Upsert — insert or increment quantity atomically
     await db.query(
       `INSERT INTO cart_items (cart_id, variant_id, quantity)
        VALUES ($1, $2, $3)
@@ -187,12 +187,13 @@ async function updateCartItem(req, res) {
     if (quantity === 0) {
       await db.query("DELETE FROM cart_items WHERE id = $1", [itemId]);
     } else {
-      if (itemRes.rows[0].stock_qty <= 0) {
+      const { stock_qty } = itemRes.rows[0];
+      if (stock_qty <= 0) {
         console.log({ route: "PUT /api/cart/update-item", userId: req.user.id, itemId, status: 400, message: "item out of stock" });
-        return res.status(400).json({
-          success: false,
-          message: "Item is out of stock"
-        });
+        return res.status(400).json({ success: false, message: "Item is out of stock" });
+      }
+      if (quantity > stock_qty) {
+        return res.status(400).json({ success: false, message: `Only ${stock_qty} unit(s) available` });
       }
       await db.query(
         "UPDATE cart_items SET quantity = $1, updated_at = NOW() WHERE id = $2",
