@@ -771,9 +771,9 @@ async function register(req, res) {
     const passwordHash = await bcrypt.hash(password, 10);
     const result = await db.query(
       `INSERT INTO users (email, phone, full_name, role, status, password_hash)
-       VALUES ($1, $2, $3, 'customer', 'active', $4)
+       VALUES ($1::text, $2, $3, 'customer', 'active', $4)
        RETURNING *`,
-      [normalizedEmail, normalizedPhone, fullName.trim(), passwordHash],
+      [normalizedEmail ?? null, normalizedPhone, fullName.trim(), passwordHash],
     );
 
     const user = result.rows[0];
