@@ -12,7 +12,7 @@ const isTrue = (val) => val === true || val === "true" || val === 1 || val === "
 // ADMIN — GET /api/inventory
 // Full inventory list — every variant with product name and category.
 // Supports filter by low stock, out of stock, category, search.
-// Query: ?lowStock=true  ?outOfStock=true  ?category=slug
+// Query: ?lowStock=true  ?outOfStock=true  ?inStock=true  ?category=slug
 //        ?search=text  ?page=1  ?limit=50
 // ==================================================================
 async function getInventory(req, res) {
@@ -21,9 +21,10 @@ async function getInventory(req, res) {
   const offset = (page - 1) * limit;
   const lowStock = false; // Low stock concept is removed system-wide
   const outOfStock = req.query.outOfStock === "true";
+  const inStock = req.query.inStock === "true";
   const catSlug = req.query.category || null;
   const search = req.query.search || null;
-  console.log({ route: "GET /api/inventory", query: { page, limit, outOfStock, catSlug, search }, status: "fetching inventory" });
+  console.log({ route: "GET /api/inventory", query: { page, limit, outOfStock, inStock, catSlug, search }, status: "fetching inventory" });
 
   try {
     const result = await db.query(
@@ -49,16 +50,19 @@ async function getInventory(req, res) {
        LEFT JOIN categories c ON c.id = p.category_id
        LEFT JOIN product_images pi ON pi.product_id = p.id AND pi.is_primary = TRUE
        WHERE
+         p.is_active = TRUE AND
+         pv.is_active = TRUE AND
          (NOT $1 OR pv.stock_qty > 0 AND pv.stock_qty <= 10) AND
          (NOT $2 OR pv.stock_qty = 0) AND
          ($3::text IS NULL OR c.slug = $3) AND
          ($4::text IS NULL OR
            p.name_en ILIKE '%' || $4 || '%' OR
            p.name_ta ILIKE '%' || $4 || '%'
-         )
+         ) AND
+         (NOT $7::boolean OR pv.stock_qty > 0)
        ORDER BY pv.stock_qty ASC, p.name_en ASC
        LIMIT $5 OFFSET $6`,
-      [lowStock, outOfStock, catSlug, search, limit, offset]
+      [lowStock, outOfStock, catSlug, search, limit, offset, inStock]
     );
 
     const countRes = await db.query(
@@ -67,11 +71,14 @@ async function getInventory(req, res) {
        JOIN products p ON p.id = pv.product_id
        LEFT JOIN categories c ON c.id = p.category_id
        WHERE
+         p.is_active = TRUE AND
+         pv.is_active = TRUE AND
          (NOT $1 OR pv.stock_qty > 0 AND pv.stock_qty <= 10) AND
          (NOT $2 OR pv.stock_qty = 0) AND
          ($3::text IS NULL OR c.slug = $3) AND
-         ($4::text IS NULL OR p.name_en ILIKE '%' || $4 || '%' OR p.name_ta ILIKE '%' || $4 || '%')`,
-      [lowStock, outOfStock, catSlug, search]
+         ($4::text IS NULL OR p.name_en ILIKE '%' || $4 || '%' OR p.name_ta ILIKE '%' || $4 || '%') AND
+         (NOT $5::boolean OR pv.stock_qty > 0)`,
+      [lowStock, outOfStock, catSlug, search, inStock]
     );
 
     console.log({ route: "GET /api/inventory", status: 200, count: result.rows.length });
