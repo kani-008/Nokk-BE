@@ -93,7 +93,7 @@ async function getAllOffers(req, res) {
 // ==================================================================
 async function getOfferById(req, res) {
   const { id } = req.query;
-  console.log({ route: "GET /api/offers/getby-id", offerId: id, status: "fetching offer by id" });
+  console.log({ route: "GET /api/offers/get-by-id", offerId: id, status: "fetching offer by id" });
   try {
     const result = await db.query(
       `SELECT o.*, p.name_en AS product_name, c.name_en AS category_name
@@ -104,13 +104,13 @@ async function getOfferById(req, res) {
       [id]
     );
     if (result.rows.length === 0) {
-      console.log({ route: "GET /api/offers/getby-id", offerId: id, status: 404, message: "Offer not found" });
+      console.log({ route: "GET /api/offers/get-by-id", offerId: id, status: 404, message: "Offer not found" });
       return res.status(404).json({ success: false, message: "Offer not found" });
     }
-    console.log({ route: "GET /api/offers/getby-id", offerId: id, status: 200 });
+    console.log({ route: "GET /api/offers/get-by-id", offerId: id, status: 200 });
     return res.json({ success: true, offer: formatOffer(result.rows[0]) });
   } catch (err) {
-    console.error({ route: "GET /api/offers/getby-id", offerId: id, status: 500, error: err.message });
+    console.error({ route: "GET /api/offers/get-by-id", offerId: id, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }

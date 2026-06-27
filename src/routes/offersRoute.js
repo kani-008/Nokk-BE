@@ -16,7 +16,7 @@ router.get("/get-active", getActiveOffers);
 
 // Admin
 router.get("/get-all", authenticate, isAdmin, getAllOffers);
-router.get("/getby-id", authenticate, isAdmin, getOfferById); // ?id=
+router.get("/get-by-id", authenticate, isAdmin, getOfferById); // ?id=
 router.post("/create-offer", authenticate, isAdmin, createOffer);
 router.put("/update-offer", authenticate, isAdmin, updateOffer); // id -> body
 router.delete("/delete-offer", authenticate, isAdmin, deleteOffer); // id -> body
