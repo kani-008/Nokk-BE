@@ -131,10 +131,10 @@ async function generateOrderId(queryFn) {
 async function checkout(req, res) {
   const {
     items, address, paymentMethod,
-    subtotal, deliveryCharge, discount, total,
+    total,
     couponApplied
   } = req.body;
-  console.log({ route: "POST /api/orders/checkout", userId: req.user.id, body: { itemsCount: items?.length, paymentMethod, subtotal, deliveryCharge, discount, total, couponApplied }, status: "checkout process started" });
+  console.log({ route: "POST /api/orders/checkout", userId: req.user.id, body: { itemsCount: items?.length, paymentMethod, total, couponApplied }, status: "checkout process started" });
 
   if (!items || !items.length || !address || !paymentMethod) {
     console.log({ route: "POST /api/orders/checkout", userId: req.user.id, status: 400, message: "items, address and paymentMethod are required" });
@@ -155,12 +155,13 @@ async function checkout(req, res) {
   try {
     await client.query("BEGIN");
 
-    // Lock variants, validate stock, and collect IDs in one pass.
+    // Lock variants, validate stock, and collect IDs and server prices in one pass.
     // FOR UPDATE prevents concurrent updates.
     const resolvedVariants = [];
+    const resolvedPrices = [];
     for (const item of items) {
       const varRes = await client.query(
-        "SELECT id, stock_qty FROM product_variants WHERE product_id = $1 AND weight_label = $2 AND is_active = TRUE FOR UPDATE",
+        "SELECT id, stock_qty, price FROM product_variants WHERE product_id = $1 AND weight_label = $2 AND is_active = TRUE FOR UPDATE",
         [item.productId, item.weight]
       );
       if (varRes.rows.length === 0) {
@@ -174,15 +175,108 @@ async function checkout(req, res) {
         throw e;
       }
       resolvedVariants.push(varRes.rows[0].id);
+      resolvedPrices.push(parseFloat(varRes.rows[0].price));
     }
 
     // Deduct stock is removed since stock_qty stays fixed as a binary availability flag (0 or 1)
+
+    // Recompute subtotal
+    let serverSubtotal = 0;
+    for (let i = 0; i < items.length; i++) {
+      serverSubtotal += resolvedPrices[i] * items[i].quantity;
+    }
+    serverSubtotal = parseFloat(serverSubtotal.toFixed(2));
+
+    // Fetch delivery settings from the DB
+    const settingsRes = await client.query("SELECT key, value FROM settings");
+    const settings = {};
+    settingsRes.rows.forEach(r => {
+      let val = r.value;
+      if (val === "true") val = true;
+      else if (val === "false") val = false;
+      else if (val !== "" && !isNaN(val)) val = Number(val);
+      settings[r.key] = val;
+    });
+
+    const freeShippingThreshold = settings.freeShippingThreshold !== undefined ? Number(settings.freeShippingThreshold) : 499;
+    const flatDeliveryCharge = settings.flatDeliveryCharge !== undefined ? Number(settings.flatDeliveryCharge) : 60;
+
+    // Validate Coupon & Recompute Discount
+    let serverDiscount = 0;
+    let freeShippingCoupon = false;
+
+    if (couponApplied) {
+      const couponCode = String(couponApplied).trim().toUpperCase();
+      const couponRes = await client.query(
+        "SELECT * FROM coupons WHERE code = $1 AND is_active = TRUE",
+        [couponCode]
+      );
+      if (couponRes.rows.length === 0) {
+        const e = new Error("Invalid coupon code");
+        e.status = 400;
+        throw e;
+      }
+
+      const c = couponRes.rows[0];
+
+      // Expiry check
+      if (c.expiry_date && new Date(c.expiry_date) < new Date()) {
+        const e = new Error("Coupon has expired");
+        e.status = 400;
+        throw e;
+      }
+
+      // Usage limit check
+      if (c.max_uses !== null && parseInt(c.usage_count) >= c.max_uses) {
+        const e = new Error("Coupon usage limit reached");
+        e.status = 400;
+        throw e;
+      }
+
+      // Minimum order check
+      if (serverSubtotal < parseFloat(c.min_order)) {
+        const e = new Error(`Minimum order of ₹${c.min_order} required for this coupon`);
+        e.status = 400;
+        throw e;
+      }
+
+      // Compute discount
+      let computedDiscount = 0;
+      if (c.discount_percent > 0) {
+        computedDiscount = (serverSubtotal * c.discount_percent) / 100;
+      } else if (parseFloat(c.discount_flat) > 0) {
+        computedDiscount = parseFloat(c.discount_flat);
+      }
+      serverDiscount = Math.min(computedDiscount, serverSubtotal);
+      serverDiscount = parseFloat(serverDiscount.toFixed(2));
+
+      if (c.free_shipping === true || c.free_shipping === "true" || c.free_shipping === 1) {
+        freeShippingCoupon = true;
+      }
+    }
+
+    // Recompute delivery charge
+    let serverDeliveryCharge = serverSubtotal >= freeShippingThreshold ? 0 : flatDeliveryCharge;
+    if (freeShippingCoupon) {
+      serverDeliveryCharge = 0;
+    }
+    serverDeliveryCharge = parseFloat(serverDeliveryCharge.toFixed(2));
+
+    // Recompute total and validate against client total
+    const serverTotal = parseFloat((serverSubtotal - serverDiscount + serverDeliveryCharge).toFixed(2));
+    const roundedClientTotal = parseFloat(parseFloat(total).toFixed(2));
+
+    if (Math.abs(roundedClientTotal - serverTotal) > 0.01) {
+      const e = new Error(`Order total mismatch. Client: ₹${roundedClientTotal}, Server: ₹${serverTotal}`);
+      e.status = 400;
+      throw e;
+    }
 
     const orderId = await generateOrderId((sql, params) => client.query(sql, params));
     const paymentStatus = paymentMethod.toLowerCase().includes("cod") ? "pending" : "paid";
     const addrLine1 = address.addressLine1 || `${address.doorNo || ""} ${address.street || ""}`.trim();
 
-    // Insert order
+    // Insert order (using ONLY server-computed values)
     await client.query(
       `INSERT INTO orders (
          id, user_id, customer_name, customer_email, customer_phone,
@@ -194,23 +288,24 @@ async function checkout(req, res) {
       [
         orderId, req.user.id,
         address.fullName, req.user.email, address.phone,
-        subtotal, deliveryCharge || 0, discount || 0,
-        couponApplied || null, total,
+        serverSubtotal, serverDeliveryCharge, serverDiscount,
+        couponApplied ? String(couponApplied).trim().toUpperCase() : null, serverTotal,
         paymentMethod, paymentStatus,
         addrLine1, address.addressLine2 || null,
         address.city, address.state || "Tamil Nadu", address.pincode
       ]
     );
 
-    // Insert order items (variant IDs already resolved — no extra selects)
+    // Insert order items using server-fetched variant prices
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
+      const dbPrice = resolvedPrices[i];
       await client.query(
         `INSERT INTO order_items
            (order_id, product_id, variant_id, name_en, name_ta, weight, price, quantity)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
         [orderId, item.productId, resolvedVariants[i], item.nameEn, item.nameTa || null,
-          item.weight, item.price, item.quantity]
+          item.weight, dbPrice, item.quantity]
       );
     }
 
@@ -218,7 +313,7 @@ async function checkout(req, res) {
     if (couponApplied) {
       await client.query(
         "UPDATE coupons SET usage_count = usage_count + 1 WHERE code = $1",
-        [couponApplied]
+        [String(couponApplied).trim().toUpperCase()]
       );
     }
 
@@ -240,7 +335,7 @@ async function checkout(req, res) {
       eventType: "new_order",
       priority: "high",
       title: "New Order Received",
-      message: `${address.fullName} placed order ${orderId} for ₹${total}`,
+      message: `${address.fullName} placed order ${orderId} for ₹${serverTotal}`,
       entityType: "orders",
       entityId: orderId,
       link: `/admin/orders/${orderId}`,
@@ -261,7 +356,7 @@ async function checkout(req, res) {
       return res.status(err.status).json({ success: false, message: err.message });
     }
     console.error({ route: "POST /api/orders/checkout", userId: req.user.id, status: 500, error: err.message });
-    return res.status(500).json({ success: false, message: "Internal server error" });
+    return res.status(500).json({ success: false, message: err.message || "Internal server error" });
   } finally {
     client.release();
   }

@@ -10,7 +10,7 @@ const {
   registerOtpCreate,
   refreshAccessToken,
   logout,
-} = require("../controllers/LoginController.js");
+} = require("../controllers/loginController.js");
 const { loginLimiter } = require("../middleware/ratelimiter.js");
 const authenticate = require("../middleware/auth.js");
 
