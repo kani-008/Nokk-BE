@@ -162,6 +162,10 @@ async function getAllProducts(req, res) {
     ? req.query.weight.split(",").filter(Boolean)
     : null;
 
+  const ids = req.query.ids
+    ? req.query.ids.split(",").map(id => id.trim()).filter(id => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id))
+    : null;
+
   const sortMap = {
     "popular":        "v.avg_rating DESC, v.review_count DESC",
     "newest":         "v.created_at DESC",
@@ -170,7 +174,7 @@ async function getAllProducts(req, res) {
   };
   const orderBy = sortMap[req.query.sort] || "v.avg_rating DESC, v.review_count DESC";
 
-  // Shared WHERE params: $1…$10
+  // Shared WHERE params: $1…$11
   const baseParams = [
     catSlug,      // $1
     search,       // $2
@@ -182,6 +186,7 @@ async function getAllProducts(req, res) {
     minRating,    // $8
     hasOffer,     // $9
     weightLabels, // $10  (null or string[])
+    ids,          // $11  (null or integer[])
   ];
 
   const whereClause = `
@@ -209,11 +214,12 @@ async function getAllProducts(req, res) {
             AND pv.is_active = TRUE
             AND pv.weight_label = ANY($10)
         ))
+    AND ($11::uuid[] IS NULL OR v.id = ANY($11::uuid[]))
   `;
 
   console.log({
     route: "GET /api/products",
-    query: { page, limit, search, category: catSlug, inStock, isBest, isNew, hasOffer, minPrice, maxPrice, minRating, weightLabels },
+    query: { page, limit, search, category: catSlug, inStock, isBest, isNew, hasOffer, minPrice, maxPrice, minRating, weightLabels, ids },
     status: "fetching products"
   });
 
@@ -223,7 +229,7 @@ async function getAllProducts(req, res) {
        FROM v_products_with_price v
        WHERE ${whereClause}
        ORDER BY ${orderBy}
-       LIMIT $11 OFFSET $12`,
+       LIMIT $12 OFFSET $13`,
       [...baseParams, limit, offset]
     );
 

@@ -4,6 +4,9 @@ const db = require("../config/db.js");
 // Get or create the user's cart row, return the cart id.
 // All cart operations go through this — one upsert, no race condition.
 // ------------------------------------------------------------------
+const isValidUuid = (id) => {
+  return typeof id === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+};
 async function getOrCreateCart(userId) {
   const res = await db.query(
     `INSERT INTO carts (user_id)
@@ -94,9 +97,9 @@ async function addToCart(req, res) {
   const { variantId, quantity = 1 } = req.body;
   console.log({ route: "POST /api/cart", userId: req.user.id, body: { variantId, quantity }, status: "adding item to cart" });
 
-  if (!variantId) {
-    console.log({ route: "POST /api/cart", userId: req.user.id, status: 400, message: "variantId is required" });
-    return res.status(400).json({ success: false, message: "variantId is required" });
+  if (!isValidUuid(variantId)) {
+    console.log({ route: "POST /api/cart", userId: req.user.id, status: 400, message: "Valid variantId is required" });
+    return res.status(400).json({ success: false, message: "Valid variantId is required" });
   }
   if (!Number.isInteger(quantity) || quantity < 1) {
     console.log({ route: "POST /api/cart", userId: req.user.id, status: 400, message: "quantity must be a positive integer" });
@@ -110,7 +113,7 @@ async function addToCart(req, res) {
       [variantId]
     );
     if (varRes.rows.length === 0) {
-      console.log({ route: "POST /api/cart", userId: req.user.id, status: 404, message: "Variant not found or inactive" });
+      console.log({ route: "POST /api/cart", userId: req.user.id, variantId, status: 404, message: "Variant not found or inactive" });
       return res.status(404).json({ success: false, message: "Variant not found or inactive" });
     }
     if (varRes.rows[0].stock_qty <= 0) {
@@ -144,6 +147,8 @@ async function addToCart(req, res) {
       [cartId, variantId, quantity]
     );
 
+    console.log(`[Cart Backend Log] Item added with item code: ${variantId} (User: ${req.user.id})`);
+
     const cart = await fetchCart(req.user.id);
     console.log({ route: "POST /api/cart", userId: req.user.id, status: 201 });
     return res.status(201).json({ success: true, message: "Item added to cart", cart });
@@ -162,6 +167,11 @@ async function updateCartItem(req, res) {
   const { itemId } = req.body;
   const quantity = parseInt(req.body.quantity);
   console.log({ route: "PUT /api/cart/update-item", userId: req.user.id, itemId, quantity, status: "updating cart item quantity" });
+
+  if (!isValidUuid(itemId)) {
+    console.log({ route: "PUT /api/cart/update-item", userId: req.user.id, status: 400, message: "Valid itemId is required" });
+    return res.status(400).json({ success: false, message: "Valid itemId is required" });
+  }
 
   if (isNaN(quantity) || quantity < 0) {
     console.log({ route: "PUT /api/cart/update-item", userId: req.user.id, itemId, status: 400, message: "quantity must be 0 or more" });
@@ -185,7 +195,9 @@ async function updateCartItem(req, res) {
     }
 
     if (quantity === 0) {
+      const variantId = itemRes.rows[0]?.variant_id;
       await db.query("DELETE FROM cart_items WHERE id = $1", [itemId]);
+      console.log(`[Cart Backend Log] Item is deleted with item code: ${variantId} (User: ${req.user.id})`);
     } else {
       const { stock_qty } = itemRes.rows[0];
       if (stock_qty <= 0) {
@@ -217,18 +229,27 @@ async function updateCartItem(req, res) {
 async function removeCartItem(req, res) {
   const { itemId } = req.body;
   console.log({ route: "DELETE /api/cart/remove-item", userId: req.user.id, itemId, status: "removing cart item" });
+
+  if (!isValidUuid(itemId)) {
+    console.log({ route: "DELETE /api/cart/remove-item", userId: req.user.id, status: 400, message: "Valid itemId is required" });
+    return res.status(400).json({ success: false, message: "Valid itemId is required" });
+  }
+
   try {
     const result = await db.query(
       `DELETE FROM cart_items
        WHERE id = $1
          AND cart_id = (SELECT id FROM carts WHERE user_id = $2)
-       RETURNING id`,
+       RETURNING id, variant_id`,
       [itemId, req.user.id]
     );
     if (result.rows.length === 0) {
       console.log({ route: "DELETE /api/cart/remove-item", userId: req.user.id, itemId, status: 404, message: "Cart item not found" });
       return res.status(404).json({ success: false, message: "Cart item not found" });
     }
+    const deletedVariantId = result.rows[0]?.variant_id;
+    console.log(`[Cart Backend Log] Item is deleted with item code: ${deletedVariantId} (User: ${req.user.id})`);
+
     const cart = await fetchCart(req.user.id);
     console.log({ route: "DELETE /api/cart/remove-item", userId: req.user.id, itemId, status: 200 });
     return res.json({ success: true, message: "Item removed", cart });
@@ -245,11 +266,15 @@ async function removeCartItem(req, res) {
 async function clearCart(req, res) {
   console.log({ route: "DELETE /api/cart", userId: req.user.id, status: "clearing cart" });
   try {
-    await db.query(
+    const result = await db.query(
       `DELETE FROM cart_items
-       WHERE cart_id = (SELECT id FROM carts WHERE user_id = $1)`,
+       WHERE cart_id = (SELECT id FROM carts WHERE user_id = $1)
+       RETURNING variant_id`,
       [req.user.id]
     );
+    for (const row of result.rows) {
+      console.log(`[Cart Backend Log] Item is deleted with item code: ${row.variant_id} (User: ${req.user.id})`);
+    }
     console.log({ route: "DELETE /api/cart", userId: req.user.id, status: 200 });
     return res.json({ success: true, message: "Cart cleared", cart: { items: [], itemCount: 0, subtotal: 0 } });
   } catch (err) {

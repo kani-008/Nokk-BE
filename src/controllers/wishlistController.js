@@ -4,6 +4,9 @@ const db     = require("../config/db.js");
 // Single JOIN query — returns all wishlist items with product details.
 // wishlists PK is (user_id, product_id) — no separate id column.
 // ------------------------------------------------------------------
+const isValidUuid = (id) => {
+  return typeof id === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+};
 async function fetchWishlist(userId) {
   const res = await db.query(
     `SELECT
@@ -31,7 +34,7 @@ async function fetchWishlist(userId) {
     [userId]
   );
 
-  return res.rows.map(r => ({
+  const items = res.rows.map(r => ({
     productId:       r.product_id,
     name:            r.name_ta ? `${r.name_en} (${r.name_ta})` : r.name_en,
     nameEn:          r.name_en,
@@ -45,6 +48,11 @@ async function fetchWishlist(userId) {
     isNew:           r.is_new,
     addedAt:         r.created_at
   }));
+
+  const itemIds = items.map(item => item.productId);
+  console.log(`[Wishlist Backend Log] Wishlist fetched with item codes: [${itemIds.join(", ")}] (User: ${userId})`);
+
+  return items;
 }
 
 // ==================================================================
@@ -71,9 +79,9 @@ async function addToWishlist(req, res) {
   const { productId } = req.body;
   console.log({ route: "POST /api/wishlist", userId: req.user?.id, productId, status: "adding to wishlist" });
 
-  if (!productId) {
-    console.log({ route: "POST /api/wishlist", userId: req.user?.id, status: 400, message: "productId is required" });
-    return res.status(400).json({ success: false, message: "productId is required" });
+  if (!isValidUuid(productId)) {
+    console.log({ route: "POST /api/wishlist", userId: req.user?.id, status: 400, message: "Valid productId is required" });
+    return res.status(400).json({ success: false, message: "Valid productId is required" });
   }
 
   try {
@@ -111,6 +119,11 @@ async function removeFromWishlist(req, res) {
   const { productId } = req.body;
   console.log({ route: "DELETE /api/wishlist/remove-item", userId: req.user?.id, productId, status: "removing from wishlist" });
 
+  if (!isValidUuid(productId)) {
+    console.log({ route: "DELETE /api/wishlist/remove-item", userId: req.user?.id, status: 400, message: "Valid productId is required" });
+    return res.status(400).json({ success: false, message: "Valid productId is required" });
+  }
+
   try {
     const result = await db.query(
       "DELETE FROM wishlists WHERE user_id = $1 AND product_id = $2 RETURNING product_id",
@@ -145,4 +158,50 @@ async function clearWishlist(req, res) {
   }
 }
 
-module.exports = { getWishlist, addToWishlist, removeFromWishlist, clearWishlist };
+// ==================================================================
+// POST /api/wishlist/merge
+// Merge local guest wishlist items into user account on login.
+// Body: { productIds: [...] }
+// ==================================================================
+async function mergeWishlist(req, res) {
+  const { productIds } = req.body;
+  console.log({ route: "POST /api/wishlist/merge", userId: req.user?.id, productIds, status: "merging wishlist" });
+
+  if (!Array.isArray(productIds)) {
+    console.log({ route: "POST /api/wishlist/merge", userId: req.user?.id, status: 400, message: "productIds must be an array" });
+    return res.status(400).json({ success: false, message: "productIds must be an array" });
+  }
+
+  const cleanProductIds = productIds.filter(isValidUuid);
+
+  if (cleanProductIds.length === 0) {
+    try {
+      const items = await fetchWishlist(req.user.id);
+      return res.json({ success: true, wishlist: items, count: items.length });
+    } catch (err) {
+      console.error({ route: "POST /api/wishlist/merge", userId: req.user?.id, status: 500, error: err.message });
+      return res.status(500).json({ success: false, message: "Internal server error" });
+    }
+  }
+
+  try {
+    // Insert all valid products that are active and ignore conflicts
+    await db.query(
+      `INSERT INTO wishlists (user_id, product_id)
+       SELECT $1, p.id
+       FROM products p
+       WHERE p.id = ANY($2) AND p.is_active = TRUE
+       ON CONFLICT (user_id, product_id) DO NOTHING`,
+      [req.user.id, cleanProductIds]
+    );
+
+    const items = await fetchWishlist(req.user.id);
+    console.log({ route: "POST /api/wishlist/merge", userId: req.user?.id, status: 200, count: items.length });
+    return res.json({ success: true, message: "Wishlist merged", wishlist: items, count: items.length });
+  } catch (err) {
+    console.error({ route: "POST /api/wishlist/merge", userId: req.user?.id, status: 500, error: err.message });
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+}
+
+module.exports = { getWishlist, addToWishlist, removeFromWishlist, clearWishlist, mergeWishlist };
