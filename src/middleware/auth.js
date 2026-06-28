@@ -1,36 +1,43 @@
-const jwt = require('jsonwebtoken');
-require('dotenv').config();
+const jwt    = require("jsonwebtoken");
 
-const JWT_SECRET = process.env.JWT_SECRET || 'nok_secret_key_2026';
+const ACCESS_TOKEN_SECRET = process.env.ACCESS_TOKEN_SECRET;
+if (!ACCESS_TOKEN_SECRET) {
+  throw new Error("FATAL: ACCESS_TOKEN_SECRET env var must be set");
+}
 
-// Middleware to verify if user has active session
-const verifyToken = (req, res, next) => {
-  const authHeader = req.headers['authorization'];
-  const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
+// Verifies the Bearer access token. Used by ALL protected routes.
+function verifyToken(req, res, next) {
+  const authHeader = req.headers["authorization"];
+  const token = authHeader && authHeader.split(" ")[1];
 
   if (!token) {
-    return res.status(401).json({ success: false, message: 'Access Denied: No Token Provided' });
+    console.log(`[auth] no token  ${req.method} ${req.originalUrl}`);
+    return res.status(401).json({ success: false, message: "Access denied: no token provided" });
   }
 
   try {
-    const verified = jwt.verify(token, JWT_SECRET);
-    req.user = verified;
+    req.user = jwt.verify(token, ACCESS_TOKEN_SECRET);
+    console.log("Token verified | user:", req.user.id, "role:", req.user.role);
     next();
   } catch (err) {
-    return res.status(403).json({ success: false, message: 'Invalid or Expired Token' });
+    console.error(`[auth] token rejected  ${req.method} ${req.originalUrl} | ${err.message}`);
+    return res.status(401).json({ success: false, message: "Invalid or expired token" });
   }
-};
+}
 
-// Middleware to verify if user has Admin role
-const isAdmin = (req, res, next) => {
-  if (!req.user || req.user.role !== 'admin') {
-    return res.status(403).json({ success: false, message: 'Access Denied: Admin privileges required' });
+// Admin guard — must run AFTER verifyToken.
+function isAdmin(req, res, next) {
+  if (!req.user || req.user.role !== "admin") {
+    console.log(`[auth] not admin  ${req.method} ${req.originalUrl} | role="${req.user?.role}"`);
+    return res.status(403).json({ success: false, message: "Access denied: admin privileges required" });
   }
   next();
-};
+}
 
-module.exports = {
-  verifyToken,
-  isAdmin,
-  JWT_SECRET
-};
+// Support BOTH import styles used across the project:
+//   const { verifyToken, isAdmin } = require("../middleware/auth");   <- Antigravity IDE style
+//   const authenticate = require("../middleware/auth");               <- loginRoute style
+module.exports = verifyToken;           // default export (authenticate alias)
+module.exports.verifyToken = verifyToken;
+module.exports.isAdmin = isAdmin;
+module.exports.authenticate = verifyToken;  // alias used in loginRoute
