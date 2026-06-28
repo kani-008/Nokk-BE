@@ -1015,7 +1015,12 @@ async function createRazorpayOrder(req, res) {
   const userId = req.user.id;
   console.log("=".repeat(60));
   console.log(`[RAZORPAY CREATE-ORDER] START userId=${userId}`);
-  console.log(`[RAZORPAY CREATE-ORDER] items=${items?.length} coupon=${couponApplied || "none"} address=${address?.city}, ${address?.pincode}`);
+  console.log(`[RAZORPAY CREATE-ORDER] Incoming payload details:`, JSON.stringify({
+    userId,
+    itemsCount: items?.length,
+    couponApplied,
+    address,
+  }, null, 2));
 
   if (!items || !items.length || !address) {
     console.log(`[RAZORPAY CREATE-ORDER] 400 — missing items or address`);
@@ -1175,7 +1180,14 @@ async function verifyRazorpayPayment(req, res) {
 
   console.log("=".repeat(60));
   console.log(`[RAZORPAY VERIFY] START userId=${userId} ip=${clientIp}`);
-  console.log(`[RAZORPAY VERIFY] razorpay_order_id=${razorpay_order_id} razorpay_payment_id=${razorpay_payment_id}`);
+  console.log(`[RAZORPAY VERIFY] Incoming request body:`, JSON.stringify({
+    razorpay_order_id,
+    razorpay_payment_id,
+    razorpay_signature,
+    itemsCount: items?.length,
+    couponApplied,
+    address,
+  }, null, 2));
 
   if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
     console.log(`[RAZORPAY VERIFY] 400 — missing required Razorpay fields`);
@@ -1215,6 +1227,12 @@ async function verifyRazorpayPayment(req, res) {
   const expectedHex = crypto.createHmac("sha256", keySecret)
     .update(hmacBody)
     .digest("hex");
+
+  console.log(`[RAZORPAY VERIFY] STEP 2 — signature details:`, {
+    expectedHex,
+    receivedSignature: razorpay_signature,
+    match: expectedHex === razorpay_signature
+  });
 
   let signatureValid = false;
   try {
@@ -1343,6 +1361,9 @@ async function handleRazorpayWebhook(req, res) {
   const signature = req.headers["x-razorpay-signature"];
   const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
 
+  console.log("=".repeat(60));
+  console.log("[Razorpay Webhook] Webhook request received. X-Razorpay-Signature:", signature);
+
   if (!webhookSecret) {
     console.error("[Razorpay Webhook] RAZORPAY_WEBHOOK_SECRET not configured");
     return res.status(500).json({ success: false });
@@ -1358,6 +1379,8 @@ async function handleRazorpayWebhook(req, res) {
   const expectedSig = crypto.createHmac("sha256", webhookSecret)
     .update(rawBody)
     .digest("hex");
+
+  console.log("[Razorpay Webhook] Signature verification. Expected:", expectedSig, "Received:", signature);
 
   let isValid = false;
   try {
@@ -1376,7 +1399,9 @@ async function handleRazorpayWebhook(req, res) {
   let event;
   try {
     event = JSON.parse(rawBody.toString("utf8"));
+    console.log("[Razorpay Webhook] Parsed event details:", JSON.stringify(event, null, 2));
   } catch (_) {
+    console.error("[Razorpay Webhook] Failed to parse webhook raw JSON body");
     return res.status(400).json({ success: false, message: "Invalid JSON body" });
   }
 
