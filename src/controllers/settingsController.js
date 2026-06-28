@@ -104,4 +104,35 @@ async function getSetting(req, res) {
   }
 }
 
-module.exports = { getSettings, updateSettings, getSetting };
+// ==================================================================
+// PUBLIC — GET /api/settings/get-public?key=<key>
+// Exposes a small allowlist of settings to unauthenticated callers.
+// Currently used by the frontend to fetch razorpayKeyId for the
+// Razorpay Checkout widget. The key SECRET is never in this list.
+// ==================================================================
+const PUBLIC_SETTING_ALLOWLIST = ["razorpayKeyId"];
+
+async function getPublicSetting(req, res) {
+  const { key } = req.query;
+  if (!key || !PUBLIC_SETTING_ALLOWLIST.includes(key)) {
+    return res.status(403).json({ success: false, message: "This setting is not publicly accessible" });
+  }
+  try {
+    const result = await db.query(
+      "SELECT key, value FROM settings WHERE key = $1", [key]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, message: "Setting not found" });
+    }
+    return res.json({
+      success: true,
+      key:   result.rows[0].key,
+      value: castValue(result.rows[0].value),
+    });
+  } catch (err) {
+    console.error({ route: "GET /api/settings/get-public", key, error: err.message });
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+}
+
+module.exports = { getSettings, updateSettings, getSetting, getPublicSetting };

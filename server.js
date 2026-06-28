@@ -57,6 +57,14 @@ app.use(
   }),
 );
 
+// ── Razorpay webhook — raw body BEFORE express.json() ────────────
+// Razorpay's HMAC signature is computed over the raw request body.
+// Mounting with express.raw() here (before the global JSON parser)
+// ensures req.body is a Buffer when the webhook handler runs.
+// All other /api/orders routes go through express.json() normally.
+const { handleRazorpayWebhook } = require("./src/controllers/orderController.js");
+app.post("/api/orders/razorpay/webhook", express.raw({ type: "*/*" }), handleRazorpayWebhook);
+
 // ── Body parsers with size caps ───────────────────────────────────
 app.use(express.json({ limit: "50kb" }));
 app.use(express.urlencoded({ extended: true, limit: "50kb" }));
