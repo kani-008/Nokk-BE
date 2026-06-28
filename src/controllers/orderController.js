@@ -1,5 +1,7 @@
+const crypto = require("crypto");
 const db = require("../config/db.js");
 const { createNotification } = require("./notificationController.js");
+const { getRazorpayClient, RAZORPAY_KEY_ID } = require("../config/razorpay.js");
 
 // ------------------------------------------------------------------
 // Helpers
@@ -23,6 +25,8 @@ function formatOrder(ord, items = [], timeline = []) {
     paymentStatus: ord.payment_status,
     paymentMethod: ord.payment_method,
     upiReference: ord.upi_reference || null,
+    razorpayOrderId: ord.razorpay_order_id || null,
+    razorpayPaymentId: ord.razorpay_payment_id || null,
     courierName: ord.courier_name || null,
     trackingNumber: ord.tracking_number || null,
     trackingUrl: ord.tracking_url || null,
@@ -123,6 +127,217 @@ async function generateOrderId(queryFn) {
   return orderId;
 }
 
+// ------------------------------------------------------------------
+// _createOrderCore — shared internal order-creation logic.
+//
+// MUST be called inside an already-open transaction (BEGIN issued by caller).
+// Handles: variant locking, stock check, price/coupon/total recomputation,
+// INSERT orders + order_items + order_timelines, coupon usage increment,
+// cart clear. Does NOT commit — caller commits after this returns.
+//
+// Parameters:
+//   client              — pg transaction client
+//   userId              — authenticated user's UUID
+//   userEmail           — user's email (may be null)
+//   items               — array of { productId, weight, nameEn, nameTa, quantity }
+//   address             — { fullName, phone, addressLine1, addressLine2?, city, state?, pincode }
+//   couponApplied       — coupon code string or null
+//   paymentMethod       — "cod" | "upi" | "razorpay_upi" | "razorpay_card" | ...
+//   paymentStatus       — "pending" | "paid"
+//   expectedTotal       — if provided, validates server-computed total against this value
+//   razorpayOrderId     — Razorpay order ID (null for cod/upi)
+//   razorpayPaymentId   — Razorpay payment ID (null for cod/upi)
+//   razorpaySignature   — HMAC signature (null for cod/upi)
+//
+// Returns: { orderId, serverTotal, serverSubtotal, serverDeliveryCharge, serverDiscount }
+// ------------------------------------------------------------------
+async function _createOrderCore(client, {
+  userId, userEmail, items, address, couponApplied,
+  paymentMethod, paymentStatus, expectedTotal = null,
+  razorpayOrderId = null, razorpayPaymentId = null, razorpaySignature = null,
+}) {
+  const tag = `[_createOrderCore userId=${userId} method=${paymentMethod}]`;
+  console.log(`${tag} START — items: ${items.length}, coupon: ${couponApplied || "none"}, paymentStatus: ${paymentStatus}`);
+
+  // Lock variants and validate stock
+  console.log(`${tag} STEP 1 — locking variants and checking stock`);
+  const resolvedVariants = [];
+  const resolvedPrices = [];
+  for (const item of items) {
+    const varRes = await client.query(
+      "SELECT id, stock_qty, price FROM product_variants WHERE product_id = $1 AND weight_label = $2 AND is_active = TRUE FOR UPDATE",
+      [item.productId, item.weight]
+    );
+    if (varRes.rows.length === 0) {
+      const e = new Error(`Variant not found: ${item.nameEn} (${item.weight})`);
+      console.log(`${tag} STEP 1 FAIL — variant not found: ${item.nameEn} (${item.weight})`);
+      e.status = 400; throw e;
+    }
+    if (varRes.rows[0].stock_qty <= 0) {
+      const e = new Error(`Product variant ${item.nameEn} (${item.weight}) is out of stock`);
+      console.log(`${tag} STEP 1 FAIL — out of stock: ${item.nameEn} (${item.weight})`);
+      e.status = 400; throw e;
+    }
+    console.log(`${tag} STEP 1 — variant OK: ${item.nameEn} (${item.weight}) qty=${item.quantity} dbPrice=₹${varRes.rows[0].price}`);
+    resolvedVariants.push(varRes.rows[0].id);
+    resolvedPrices.push(parseFloat(varRes.rows[0].price));
+  }
+
+  // Recompute subtotal from DB prices (client-sent prices are never trusted)
+  let serverSubtotal = 0;
+  for (let i = 0; i < items.length; i++) {
+    serverSubtotal += resolvedPrices[i] * items[i].quantity;
+  }
+  serverSubtotal = parseFloat(serverSubtotal.toFixed(2));
+  console.log(`${tag} STEP 2 — subtotal recomputed: ₹${serverSubtotal}`);
+
+  // Fetch delivery settings
+  const settingsRes = await client.query("SELECT key, value FROM settings");
+  const settings = {};
+  settingsRes.rows.forEach(r => {
+    let val = r.value;
+    if (val === "true") val = true;
+    else if (val === "false") val = false;
+    else if (val !== "" && !isNaN(val)) val = Number(val);
+    settings[r.key] = val;
+  });
+  const freeShippingThreshold = settings.freeShippingThreshold !== undefined ? Number(settings.freeShippingThreshold) : 499;
+  const flatDeliveryCharge    = settings.flatDeliveryCharge    !== undefined ? Number(settings.flatDeliveryCharge)    : 60;
+  console.log(`${tag} STEP 3 — delivery settings: freeShippingThreshold=₹${freeShippingThreshold}, flatDeliveryCharge=₹${flatDeliveryCharge}`);
+
+  // Validate coupon & recompute discount
+  let serverDiscount = 0;
+  let freeShippingCoupon = false;
+
+  if (couponApplied) {
+    console.log(`${tag} STEP 4 — validating coupon: ${couponApplied}`);
+    const couponCode = String(couponApplied).trim().toUpperCase();
+    const couponRes = await client.query(
+      "SELECT * FROM coupons WHERE code = $1 AND is_active = TRUE",
+      [couponCode]
+    );
+    if (couponRes.rows.length === 0) {
+      console.log(`${tag} STEP 4 FAIL — invalid coupon: ${couponCode}`);
+      const e = new Error("Invalid coupon code"); e.status = 400; throw e;
+    }
+    const c = couponRes.rows[0];
+    if (c.expiry_date && new Date(c.expiry_date) < new Date()) {
+      console.log(`${tag} STEP 4 FAIL — coupon expired: ${couponCode}, expiry: ${c.expiry_date}`);
+      const e = new Error("Coupon has expired"); e.status = 400; throw e;
+    }
+    if (c.max_uses !== null && parseInt(c.usage_count) >= c.max_uses) {
+      console.log(`${tag} STEP 4 FAIL — coupon usage limit reached: ${couponCode} (${c.usage_count}/${c.max_uses})`);
+      const e = new Error("Coupon usage limit reached"); e.status = 400; throw e;
+    }
+    if (serverSubtotal < parseFloat(c.min_order)) {
+      console.log(`${tag} STEP 4 FAIL — subtotal ₹${serverSubtotal} below coupon min ₹${c.min_order}`);
+      const e = new Error(`Minimum order of ₹${c.min_order} required for this coupon`); e.status = 400; throw e;
+    }
+    let computedDiscount = 0;
+    if (c.discount_percent > 0) {
+      computedDiscount = (serverSubtotal * c.discount_percent) / 100;
+    } else if (parseFloat(c.discount_flat) > 0) {
+      computedDiscount = parseFloat(c.discount_flat);
+    }
+    serverDiscount = Math.min(computedDiscount, serverSubtotal);
+    serverDiscount = parseFloat(serverDiscount.toFixed(2));
+    if (c.free_shipping === true || c.free_shipping === "true" || c.free_shipping === 1) {
+      freeShippingCoupon = true;
+    }
+    console.log(`${tag} STEP 4 — coupon valid: discount=₹${serverDiscount}, freeShipping=${freeShippingCoupon}`);
+  } else {
+    console.log(`${tag} STEP 4 — no coupon applied`);
+  }
+
+  // Recompute delivery charge
+  let serverDeliveryCharge = serverSubtotal >= freeShippingThreshold ? 0 : flatDeliveryCharge;
+  if (freeShippingCoupon) serverDeliveryCharge = 0;
+  serverDeliveryCharge = parseFloat(serverDeliveryCharge.toFixed(2));
+
+  // Recompute total
+  const serverTotal = parseFloat((serverSubtotal - serverDiscount + serverDeliveryCharge).toFixed(2));
+  console.log(`${tag} STEP 5 — totals: subtotal=₹${serverSubtotal} discount=₹${serverDiscount} delivery=₹${serverDeliveryCharge} total=₹${serverTotal}`);
+
+  // Validate against expected total if provided (used by checkout to catch UI drift)
+  if (expectedTotal !== null) {
+    const roundedExpected = parseFloat(parseFloat(expectedTotal).toFixed(2));
+    if (Math.abs(roundedExpected - serverTotal) > 0.01) {
+      console.log(`${tag} STEP 5 FAIL — total mismatch: client=₹${roundedExpected} server=₹${serverTotal}`);
+      const e = new Error(`Order total mismatch. Client: ₹${roundedExpected}, Server: ₹${serverTotal}`);
+      e.status = 400; throw e;
+    }
+    console.log(`${tag} STEP 5 — total validated against client value ₹${roundedExpected} ✓`);
+  }
+
+  const orderId = await generateOrderId((sql, params) => client.query(sql, params));
+  console.log(`${tag} STEP 6 — generated orderId: ${orderId}`);
+  const addrLine1 = address.addressLine1 || `${address.doorNo || ""} ${address.street || ""}`.trim();
+
+  // Insert order using ONLY server-computed values
+  await client.query(
+    `INSERT INTO orders (
+       id, user_id, customer_name, customer_email, customer_phone,
+       subtotal, delivery_charge, discount, coupon_applied, total,
+       status, payment_method, payment_status,
+       shipping_address_line1, shipping_address_line2,
+       shipping_city, shipping_state, shipping_pincode,
+       razorpay_order_id, razorpay_payment_id, razorpay_signature
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending',$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`,
+    [
+      orderId, userId,
+      address.fullName, userEmail || null, address.phone,
+      serverSubtotal, serverDeliveryCharge, serverDiscount,
+      couponApplied ? String(couponApplied).trim().toUpperCase() : null, serverTotal,
+      paymentMethod, paymentStatus,
+      addrLine1, address.addressLine2 || null,
+      address.city, address.state || "Tamil Nadu", address.pincode,
+      razorpayOrderId, razorpayPaymentId, razorpaySignature,
+    ]
+  );
+  console.log(`${tag} STEP 7 — order row inserted: ${orderId}`);
+
+  // Insert order items using server-fetched variant prices
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    await client.query(
+      `INSERT INTO order_items
+         (order_id, product_id, variant_id, name_en, name_ta, weight, price, quantity)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [orderId, item.productId, resolvedVariants[i], item.nameEn, item.nameTa || null,
+        item.weight, resolvedPrices[i], item.quantity]
+    );
+    console.log(`${tag} STEP 7 — order_item inserted: ${item.nameEn} (${item.weight}) x${item.quantity} @ ₹${resolvedPrices[i]}`);
+  }
+
+  // Track coupon usage so max_uses limits actually work
+  if (couponApplied) {
+    await client.query(
+      "UPDATE coupons SET usage_count = usage_count + 1 WHERE code = $1",
+      [String(couponApplied).trim().toUpperCase()]
+    );
+    console.log(`${tag} STEP 8 — coupon usage incremented: ${couponApplied}`);
+  }
+
+  // Initial timeline entry
+  await client.query(
+    "INSERT INTO order_timelines (order_id, status, notes) VALUES ($1,'pending','Order placed by customer.')",
+    [orderId]
+  );
+  console.log(`${tag} STEP 9 — timeline entry created`);
+
+  // Clear user's cart
+  const cartRes = await client.query("SELECT id FROM carts WHERE user_id = $1", [userId]);
+  if (cartRes.rows.length > 0) {
+    await client.query("DELETE FROM cart_items WHERE cart_id = $1", [cartRes.rows[0].id]);
+    console.log(`${tag} STEP 10 — cart cleared for user`);
+  } else {
+    console.log(`${tag} STEP 10 — no cart found to clear`);
+  }
+
+  console.log(`${tag} DONE — orderId=${orderId} total=₹${serverTotal}`);
+  return { orderId, serverTotal, serverSubtotal, serverDeliveryCharge, serverDiscount };
+}
+
 // ==================================================================
 // POST /api/orders/checkout   (customer — login required)
 // Body: { items, address, paymentMethod, couponApplied?,
@@ -134,202 +349,44 @@ async function checkout(req, res) {
     total,
     couponApplied
   } = req.body;
-  console.log({ route: "POST /api/orders/checkout", userId: req.user.id, body: { itemsCount: items?.length, paymentMethod, total, couponApplied }, status: "checkout process started" });
+  console.log("=".repeat(60));
+  console.log(`[CHECKOUT] START userId=${req.user.id}`);
+  console.log(`[CHECKOUT] paymentMethod=${paymentMethod} clientTotal=₹${total} coupon=${couponApplied || "none"} items=${items?.length}`);
+  console.log(`[CHECKOUT] address: ${address?.fullName}, ${address?.city}, ${address?.pincode}`);
 
   if (!items || !items.length || !address || !paymentMethod) {
-    console.log({ route: "POST /api/orders/checkout", userId: req.user.id, status: 400, message: "items, address and paymentMethod are required" });
+    console.log(`[CHECKOUT] 400 — missing required fields`);
     return res.status(400).json({ success: false, message: "items, address and paymentMethod are required" });
   }
   if (!Array.isArray(items) || items.length > 50) {
+    console.log(`[CHECKOUT] 400 — invalid items array (length=${items?.length})`);
     return res.status(400).json({ success: false, message: "Invalid items" });
   }
   if (!["cod", "upi"].includes(paymentMethod)) {
+    console.log(`[CHECKOUT] 400 — invalid paymentMethod: ${paymentMethod}`);
     return res.status(400).json({ success: false, message: "Invalid payment method" });
   }
   if (!address.fullName || !address.phone || !address.addressLine1 || !address.city || !address.pincode) {
-    console.log({ route: "POST /api/orders/checkout", userId: req.user.id, status: 400, message: "incomplete address" });
+    console.log(`[CHECKOUT] 400 — incomplete address`);
     return res.status(400).json({ success: false, message: "Incomplete address — fullName, phone, addressLine1, city, pincode required" });
   }
 
+  console.log(`[CHECKOUT] validation passed — opening DB transaction`);
   const client = await db.getClient();
   try {
     await client.query("BEGIN");
 
-    // Lock variants, validate stock, and collect IDs and server prices in one pass.
-    // FOR UPDATE prevents concurrent updates.
-    const resolvedVariants = [];
-    const resolvedPrices = [];
-    for (const item of items) {
-      const varRes = await client.query(
-        "SELECT id, stock_qty, price FROM product_variants WHERE product_id = $1 AND weight_label = $2 AND is_active = TRUE FOR UPDATE",
-        [item.productId, item.weight]
-      );
-      if (varRes.rows.length === 0) {
-        const e = new Error(`Variant not found: ${item.nameEn} (${item.weight})`);
-        e.status = 400;
-        throw e;
-      }
-      if (varRes.rows[0].stock_qty <= 0) {
-        const e = new Error(`Product variant ${item.nameEn} (${item.weight}) is out of stock`);
-        e.status = 400;
-        throw e;
-      }
-      resolvedVariants.push(varRes.rows[0].id);
-      resolvedPrices.push(parseFloat(varRes.rows[0].price));
-    }
-
-    // Deduct stock is removed since stock_qty stays fixed as a binary availability flag (0 or 1)
-
-    // Recompute subtotal
-    let serverSubtotal = 0;
-    for (let i = 0; i < items.length; i++) {
-      serverSubtotal += resolvedPrices[i] * items[i].quantity;
-    }
-    serverSubtotal = parseFloat(serverSubtotal.toFixed(2));
-
-    // Fetch delivery settings from the DB
-    const settingsRes = await client.query("SELECT key, value FROM settings");
-    const settings = {};
-    settingsRes.rows.forEach(r => {
-      let val = r.value;
-      if (val === "true") val = true;
-      else if (val === "false") val = false;
-      else if (val !== "" && !isNaN(val)) val = Number(val);
-      settings[r.key] = val;
+    const { orderId, serverTotal } = await _createOrderCore(client, {
+      userId:        req.user.id,
+      userEmail:     req.user.email || null,
+      items, address, couponApplied,
+      paymentMethod,
+      paymentStatus: paymentMethod.toLowerCase().includes("cod") ? "pending" : "paid",
+      expectedTotal: total,
     });
 
-    const freeShippingThreshold = settings.freeShippingThreshold !== undefined ? Number(settings.freeShippingThreshold) : 499;
-    const flatDeliveryCharge = settings.flatDeliveryCharge !== undefined ? Number(settings.flatDeliveryCharge) : 60;
-
-    // Validate Coupon & Recompute Discount
-    let serverDiscount = 0;
-    let freeShippingCoupon = false;
-
-    if (couponApplied) {
-      const couponCode = String(couponApplied).trim().toUpperCase();
-      const couponRes = await client.query(
-        "SELECT * FROM coupons WHERE code = $1 AND is_active = TRUE",
-        [couponCode]
-      );
-      if (couponRes.rows.length === 0) {
-        const e = new Error("Invalid coupon code");
-        e.status = 400;
-        throw e;
-      }
-
-      const c = couponRes.rows[0];
-
-      // Expiry check
-      if (c.expiry_date && new Date(c.expiry_date) < new Date()) {
-        const e = new Error("Coupon has expired");
-        e.status = 400;
-        throw e;
-      }
-
-      // Usage limit check
-      if (c.max_uses !== null && parseInt(c.usage_count) >= c.max_uses) {
-        const e = new Error("Coupon usage limit reached");
-        e.status = 400;
-        throw e;
-      }
-
-      // Minimum order check
-      if (serverSubtotal < parseFloat(c.min_order)) {
-        const e = new Error(`Minimum order of ₹${c.min_order} required for this coupon`);
-        e.status = 400;
-        throw e;
-      }
-
-      // Compute discount
-      let computedDiscount = 0;
-      if (c.discount_percent > 0) {
-        computedDiscount = (serverSubtotal * c.discount_percent) / 100;
-      } else if (parseFloat(c.discount_flat) > 0) {
-        computedDiscount = parseFloat(c.discount_flat);
-      }
-      serverDiscount = Math.min(computedDiscount, serverSubtotal);
-      serverDiscount = parseFloat(serverDiscount.toFixed(2));
-
-      if (c.free_shipping === true || c.free_shipping === "true" || c.free_shipping === 1) {
-        freeShippingCoupon = true;
-      }
-    }
-
-    // Recompute delivery charge
-    let serverDeliveryCharge = serverSubtotal >= freeShippingThreshold ? 0 : flatDeliveryCharge;
-    if (freeShippingCoupon) {
-      serverDeliveryCharge = 0;
-    }
-    serverDeliveryCharge = parseFloat(serverDeliveryCharge.toFixed(2));
-
-    // Recompute total and validate against client total
-    const serverTotal = parseFloat((serverSubtotal - serverDiscount + serverDeliveryCharge).toFixed(2));
-    const roundedClientTotal = parseFloat(parseFloat(total).toFixed(2));
-
-    if (Math.abs(roundedClientTotal - serverTotal) > 0.01) {
-      const e = new Error(`Order total mismatch. Client: ₹${roundedClientTotal}, Server: ₹${serverTotal}`);
-      e.status = 400;
-      throw e;
-    }
-
-    const orderId = await generateOrderId((sql, params) => client.query(sql, params));
-    const paymentStatus = paymentMethod.toLowerCase().includes("cod") ? "pending" : "paid";
-    const addrLine1 = address.addressLine1 || `${address.doorNo || ""} ${address.street || ""}`.trim();
-
-    // Insert order (using ONLY server-computed values)
-    await client.query(
-      `INSERT INTO orders (
-         id, user_id, customer_name, customer_email, customer_phone,
-         subtotal, delivery_charge, discount, coupon_applied, total,
-         status, payment_method, payment_status,
-         shipping_address_line1, shipping_address_line2,
-         shipping_city, shipping_state, shipping_pincode
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending',$11,$12,$13,$14,$15,$16,$17)`,
-      [
-        orderId, req.user.id,
-        address.fullName, req.user.email || null, address.phone,
-        serverSubtotal, serverDeliveryCharge, serverDiscount,
-        couponApplied ? String(couponApplied).trim().toUpperCase() : null, serverTotal,
-        paymentMethod, paymentStatus,
-        addrLine1, address.addressLine2 || null,
-        address.city, address.state || "Tamil Nadu", address.pincode
-      ]
-    );
-
-    // Insert order items using server-fetched variant prices
-    for (let i = 0; i < items.length; i++) {
-      const item = items[i];
-      const dbPrice = resolvedPrices[i];
-      await client.query(
-        `INSERT INTO order_items
-           (order_id, product_id, variant_id, name_en, name_ta, weight, price, quantity)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-        [orderId, item.productId, resolvedVariants[i], item.nameEn, item.nameTa || null,
-          item.weight, dbPrice, item.quantity]
-      );
-    }
-
-    // Track coupon usage so max_uses limits actually work
-    if (couponApplied) {
-      await client.query(
-        "UPDATE coupons SET usage_count = usage_count + 1 WHERE code = $1",
-        [String(couponApplied).trim().toUpperCase()]
-      );
-    }
-
-    // Initial timeline entry
-    await client.query(
-      "INSERT INTO order_timelines (order_id, status, notes) VALUES ($1,'pending','Order placed by customer.')",
-      [orderId]
-    );
-
-    // Clear user's cart
-    const cartRes = await client.query("SELECT id FROM carts WHERE user_id = $1", [req.user.id]);
-    if (cartRes.rows.length > 0) {
-      await client.query("DELETE FROM cart_items WHERE cart_id = $1", [cartRes.rows[0].id]);
-    }
-
     await client.query("COMMIT");
+    console.log(`[CHECKOUT] transaction committed — orderId=${orderId} total=₹${serverTotal}`);
 
     createNotification({
       eventType: "new_order",
@@ -343,7 +400,8 @@ async function checkout(req, res) {
 
     const { items: fmtItems, timeline } = await fetchItemsAndTimeline(orderId);
     const orderRow = await db.query("SELECT * FROM orders WHERE id = $1", [orderId]);
-    console.log({ route: "POST /api/orders/checkout", userId: req.user.id, orderId, status: 201 });
+    console.log(`[CHECKOUT] 201 SUCCESS — orderId=${orderId} total=₹${serverTotal} userId=${req.user.id}`);
+    console.log("=".repeat(60));
     return res.status(201).json({
       success: true,
       message: "Order placed successfully!",
@@ -352,10 +410,12 @@ async function checkout(req, res) {
   } catch (err) {
     await client.query("ROLLBACK");
     if (err.status) {
-      console.log({ route: "POST /api/orders/checkout", userId: req.user.id, status: err.status, message: err.message });
+      console.log(`[CHECKOUT] ${err.status} ERROR — ${err.message} userId=${req.user.id}`);
+      console.log("=".repeat(60));
       return res.status(err.status).json({ success: false, message: err.message });
     }
-    console.error({ route: "POST /api/orders/checkout", userId: req.user.id, status: 500, error: err.message });
+    console.error(`[CHECKOUT] 500 ERROR — ${err.message} userId=${req.user.id}`);
+    console.log("=".repeat(60));
     return res.status(500).json({ success: false, message: err.message || "Internal server error" });
   } finally {
     client.release();
@@ -519,8 +579,6 @@ async function cancelMyOrder(req, res) {
       "UPDATE orders SET status = 'cancelled', updated_at = NOW() WHERE id = $1",
       [id]
     );
-
-
 
     await client.query(
       "INSERT INTO order_timelines (order_id, status, notes) VALUES ($1,'cancelled','Order cancelled by customer.')",
@@ -741,8 +799,6 @@ async function adminUpdateStatus(req, res) {
       [status, courierName || null, trackingNumber || null, trackingUrl || null, id]
     );
 
-
-
     await client.query(
       "INSERT INTO order_timelines (order_id, status, notes) VALUES ($1,$2,$3)",
       [id, status, notes || `Order status updated to: ${status}`]
@@ -944,6 +1000,472 @@ async function adminUpdateReplacement(req, res) {
   }
 }
 
+// ==================================================================
+// POST /api/orders/razorpay/create-order   (customer — login required)
+// Body: { items, address, couponApplied? }
+//
+// Validates stock + computes server-side total, calls Razorpay Orders API,
+// stores validated order data in pending_razorpay_orders, returns the
+// Razorpay order id so the frontend can open the Checkout widget.
+// Does NOT insert into the orders table — that happens only after
+// payment signature is verified in verify-payment.
+// ==================================================================
+async function createRazorpayOrder(req, res) {
+  const { items, address, couponApplied } = req.body;
+  const userId = req.user.id;
+  console.log("=".repeat(60));
+  console.log(`[RAZORPAY CREATE-ORDER] START userId=${userId}`);
+  console.log(`[RAZORPAY CREATE-ORDER] items=${items?.length} coupon=${couponApplied || "none"} address=${address?.city}, ${address?.pincode}`);
+
+  if (!items || !items.length || !address) {
+    console.log(`[RAZORPAY CREATE-ORDER] 400 — missing items or address`);
+    return res.status(400).json({ success: false, message: "items and address are required" });
+  }
+  if (!Array.isArray(items) || items.length > 50) {
+    console.log(`[RAZORPAY CREATE-ORDER] 400 — invalid items array`);
+    return res.status(400).json({ success: false, message: "Invalid items" });
+  }
+  if (!address.fullName || !address.phone || !address.addressLine1 || !address.city || !address.pincode) {
+    console.log(`[RAZORPAY CREATE-ORDER] 400 — incomplete address`);
+    return res.status(400).json({ success: false, message: "Incomplete address — fullName, phone, addressLine1, city, pincode required" });
+  }
+
+  try {
+    // Validate stock and collect server prices (read-only; re-validated at verify time)
+    console.log(`[RAZORPAY CREATE-ORDER] STEP 1 — checking stock and fetching prices`);
+    const resolvedPrices = [];
+    for (const item of items) {
+      const varRes = await db.query(
+        "SELECT stock_qty, price FROM product_variants WHERE product_id = $1 AND weight_label = $2 AND is_active = TRUE",
+        [item.productId, item.weight]
+      );
+      if (varRes.rows.length === 0) {
+        return res.status(400).json({ success: false, message: `Variant not found: ${item.nameEn} (${item.weight})` });
+      }
+      if (varRes.rows[0].stock_qty <= 0) {
+        return res.status(400).json({ success: false, message: `${item.nameEn} (${item.weight}) is out of stock` });
+      }
+      resolvedPrices.push(parseFloat(varRes.rows[0].price));
+    }
+
+    // Compute subtotal
+    let serverSubtotal = 0;
+    for (let i = 0; i < items.length; i++) {
+      serverSubtotal += resolvedPrices[i] * items[i].quantity;
+    }
+    serverSubtotal = parseFloat(serverSubtotal.toFixed(2));
+
+    // Fetch delivery settings
+    const settingsRes = await db.query("SELECT key, value FROM settings");
+    const settings = {};
+    settingsRes.rows.forEach(r => {
+      let val = r.value;
+      if (val === "true") val = true;
+      else if (val === "false") val = false;
+      else if (val !== "" && !isNaN(val)) val = Number(val);
+      settings[r.key] = val;
+    });
+    const freeShippingThreshold = settings.freeShippingThreshold !== undefined ? Number(settings.freeShippingThreshold) : 499;
+    const flatDeliveryCharge    = settings.flatDeliveryCharge    !== undefined ? Number(settings.flatDeliveryCharge)    : 60;
+
+    // Validate coupon
+    let serverDiscount = 0;
+    let freeShippingCoupon = false;
+    if (couponApplied) {
+      const couponCode = String(couponApplied).trim().toUpperCase();
+      const couponRes = await db.query(
+        "SELECT * FROM coupons WHERE code = $1 AND is_active = TRUE", [couponCode]
+      );
+      if (couponRes.rows.length === 0) {
+        return res.status(400).json({ success: false, message: "Invalid coupon code" });
+      }
+      const c = couponRes.rows[0];
+      if (c.expiry_date && new Date(c.expiry_date) < new Date()) {
+        return res.status(400).json({ success: false, message: "Coupon has expired" });
+      }
+      if (c.max_uses !== null && parseInt(c.usage_count) >= c.max_uses) {
+        return res.status(400).json({ success: false, message: "Coupon usage limit reached" });
+      }
+      if (serverSubtotal < parseFloat(c.min_order)) {
+        return res.status(400).json({ success: false, message: `Minimum order of ₹${c.min_order} required for this coupon` });
+      }
+      let computedDiscount = 0;
+      if (c.discount_percent > 0) {
+        computedDiscount = (serverSubtotal * c.discount_percent) / 100;
+      } else if (parseFloat(c.discount_flat) > 0) {
+        computedDiscount = parseFloat(c.discount_flat);
+      }
+      serverDiscount = Math.min(computedDiscount, serverSubtotal);
+      serverDiscount = parseFloat(serverDiscount.toFixed(2));
+      if (c.free_shipping === true || c.free_shipping === "true" || c.free_shipping === 1) {
+        freeShippingCoupon = true;
+      }
+    }
+
+    let serverDeliveryCharge = serverSubtotal >= freeShippingThreshold ? 0 : flatDeliveryCharge;
+    if (freeShippingCoupon) serverDeliveryCharge = 0;
+    serverDeliveryCharge = parseFloat(serverDeliveryCharge.toFixed(2));
+    const serverTotal = parseFloat((serverSubtotal - serverDiscount + serverDeliveryCharge).toFixed(2));
+    console.log(`[RAZORPAY CREATE-ORDER] STEP 5 — totals: subtotal=₹${serverSubtotal} discount=₹${serverDiscount} delivery=₹${serverDeliveryCharge} total=₹${serverTotal}`);
+
+    // Create Razorpay order (amount in paise)
+    console.log(`[RAZORPAY CREATE-ORDER] STEP 6 — calling Razorpay orders.create amount=${Math.round(serverTotal * 100)} paise`);
+    const rpOrder = await getRazorpayClient().orders.create({
+      amount:   Math.round(serverTotal * 100),
+      currency: "INR",
+      receipt:  `nokk_${userId.slice(0, 8)}_${Date.now()}`,
+    });
+
+    console.log(`[RAZORPAY CREATE-ORDER] STEP 6 — Razorpay order created: ${rpOrder.id}`);
+
+    // Store validated order data for use at verify-payment time
+    await db.query(
+      `INSERT INTO pending_razorpay_orders
+         (razorpay_order_id, user_id, items, address, coupon_applied, server_total)
+       VALUES ($1, $2, $3::jsonb, $4::jsonb, $5, $6)
+       ON CONFLICT (razorpay_order_id) DO NOTHING`,
+      [
+        rpOrder.id, userId,
+        JSON.stringify(items), JSON.stringify(address),
+        couponApplied ? String(couponApplied).trim().toUpperCase() : null,
+        serverTotal,
+      ]
+    );
+    console.log(`[RAZORPAY CREATE-ORDER] STEP 7 — pending order stored in DB`);
+
+    // Clean up stale pending orders (older than 30 minutes) opportunistically
+    db.query("DELETE FROM pending_razorpay_orders WHERE created_at < NOW() - INTERVAL '30 minutes'")
+      .catch(() => {});
+
+    console.log(`[RAZORPAY CREATE-ORDER] 200 SUCCESS — razorpayOrderId=${rpOrder.id} amount=₹${serverTotal} userId=${userId}`);
+    console.log("=".repeat(60));
+    return res.json({
+      success: true,
+      razorpayOrderId: rpOrder.id,
+      amount:   serverTotal,
+      currency: "INR",
+      keyId:    RAZORPAY_KEY_ID,
+    });
+  } catch (err) {
+    console.error(`[RAZORPAY CREATE-ORDER] 500 ERROR — ${err.message} userId=${userId}`);
+    console.log("=".repeat(60));
+    return res.status(500).json({ success: false, message: "Failed to create payment order" });
+  }
+}
+
+// ==================================================================
+// POST /api/orders/razorpay/verify-payment   (customer — login required)
+// Body: { razorpay_order_id, razorpay_payment_id, razorpay_signature,
+//         items, address, couponApplied }
+//
+// 1. Idempotency check — return existing order if payment already processed.
+// 2. Verify HMAC-SHA256 signature server-side (key secret never leaves backend).
+// 3. Fetch payment method from Razorpay API (upi/card/netbanking/wallet).
+// 4. Re-run full price/stock/coupon validation via _createOrderCore.
+// 5. Insert order into DB only after signature passes.
+// 6. On failure: log IP + userId, return 400, create NO order.
+// ==================================================================
+async function verifyRazorpayPayment(req, res) {
+  const {
+    razorpay_order_id, razorpay_payment_id, razorpay_signature,
+    items, address, couponApplied,
+  } = req.body;
+  const userId   = req.user.id;
+  const clientIp = req.ip;
+
+  console.log("=".repeat(60));
+  console.log(`[RAZORPAY VERIFY] START userId=${userId} ip=${clientIp}`);
+  console.log(`[RAZORPAY VERIFY] razorpay_order_id=${razorpay_order_id} razorpay_payment_id=${razorpay_payment_id}`);
+
+  if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
+    console.log(`[RAZORPAY VERIFY] 400 — missing required Razorpay fields`);
+    return res.status(400).json({ success: false, message: "razorpay_order_id, razorpay_payment_id, razorpay_signature are required" });
+  }
+  if (!items || !address) {
+    console.log(`[RAZORPAY VERIFY] 400 — missing items or address`);
+    return res.status(400).json({ success: false, message: "items and address are required" });
+  }
+
+  // Idempotency: if an order already exists for this payment_id, return it
+  console.log(`[RAZORPAY VERIFY] STEP 1 — idempotency check for payment_id=${razorpay_payment_id}`);
+  const existingRes = await db.query(
+    "SELECT id FROM orders WHERE razorpay_payment_id = $1",
+    [razorpay_payment_id]
+  );
+  if (existingRes.rows.length > 0) {
+    const existingId = existingRes.rows[0].id;
+    console.log(`[RAZORPAY VERIFY] STEP 1 — order already exists: ${existingId} (idempotent return)`);
+    const [orderRow, { items: fmtItems, timeline }] = await Promise.all([
+      db.query("SELECT * FROM orders WHERE id = $1", [existingId]),
+      fetchItemsAndTimeline(existingId),
+    ]);
+    console.log("=".repeat(60));
+    return res.json({
+      success: true,
+      message: "Order already created for this payment",
+      order: formatOrder(orderRow.rows[0], fmtItems, timeline),
+    });
+  }
+  console.log(`[RAZORPAY VERIFY] STEP 1 — no duplicate found, proceeding`);
+
+  // Verify HMAC-SHA256 signature — this is the ONLY valid proof of payment
+  console.log(`[RAZORPAY VERIFY] STEP 2 — verifying HMAC-SHA256 signature`);
+  const keySecret = process.env.RAZORPAY_KEY_SECRET;
+  const hmacBody  = `${razorpay_order_id}|${razorpay_payment_id}`;
+  const expectedHex = crypto.createHmac("sha256", keySecret)
+    .update(hmacBody)
+    .digest("hex");
+
+  let signatureValid = false;
+  try {
+    const sigBuf = Buffer.from(razorpay_signature, "hex");
+    const expBuf = Buffer.from(expectedHex, "hex");
+    // timingSafeEqual requires equal lengths; length mismatch itself signals invalid
+    signatureValid = sigBuf.length === expBuf.length &&
+      crypto.timingSafeEqual(sigBuf, expBuf);
+  } catch (_) {
+    signatureValid = false;
+  }
+
+  if (!signatureValid) {
+    console.error(`[RAZORPAY VERIFY] STEP 2 FAIL — signature INVALID userId=${userId} ip=${clientIp} razorpay_order_id=${razorpay_order_id}`);
+    console.log("=".repeat(60));
+    return res.status(400).json({ success: false, message: "Payment verification failed. Invalid signature." });
+  }
+  console.log(`[RAZORPAY VERIFY] STEP 2 — signature VALID ✓`);
+
+  // Fetch payment method from Razorpay API to avoid trusting frontend-supplied method
+  console.log(`[RAZORPAY VERIFY] STEP 3 — fetching payment method from Razorpay API`);
+  let paymentMethod = "razorpay_upi"; // safe fallback
+  try {
+    const payment = await getRazorpayClient().payments.fetch(razorpay_payment_id);
+    const rpMethod = payment.method; // "upi" | "card" | "netbanking" | "wallet" | ...
+    paymentMethod = rpMethod ? `razorpay_${rpMethod}` : "razorpay_upi";
+    console.log(`[RAZORPAY VERIFY] STEP 3 — payment method resolved: ${paymentMethod}`);
+  } catch (fetchErr) {
+    // Non-fatal: method is cosmetic, not security-critical; signature already verified above
+    console.error(`[RAZORPAY VERIFY] STEP 3 WARN — payments.fetch failed (defaulting to razorpay_upi): ${fetchErr.message}`);
+  }
+
+  // Load stored pending order (use server-trusted data where available)
+  console.log(`[RAZORPAY VERIFY] STEP 4 — loading pending order data for ${razorpay_order_id}`);
+  const pendingRes = await db.query(
+    "SELECT * FROM pending_razorpay_orders WHERE razorpay_order_id = $1",
+    [razorpay_order_id]
+  );
+  const pending = pendingRes.rows[0] || null;
+
+  if (pending) {
+    console.log(`[RAZORPAY VERIFY] STEP 4 — pending order found (serverTotal=₹${pending.server_total} coupon=${pending.coupon_applied || "none"})`);
+  } else {
+    console.log(`[RAZORPAY VERIFY] STEP 4 — no pending order found, falling back to request body`);
+  }
+
+  const orderItems   = pending ? pending.items   : items;
+  const orderAddress = pending ? pending.address : address;
+  const orderCoupon  = pending ? pending.coupon_applied : couponApplied;
+
+  const client = await db.getClient();
+  try {
+    await client.query("BEGIN");
+
+    const { orderId, serverTotal } = await _createOrderCore(client, {
+      userId,
+      userEmail:         req.user.email || null,
+      items:             orderItems,
+      address:           orderAddress,
+      couponApplied:     orderCoupon,
+      paymentMethod,
+      paymentStatus:     "paid",
+      razorpayOrderId:   razorpay_order_id,
+      razorpayPaymentId: razorpay_payment_id,
+      razorpaySignature: razorpay_signature,
+    });
+
+    await client.query("COMMIT");
+    console.log(`[RAZORPAY VERIFY] STEP 5 — transaction committed orderId=${orderId} total=₹${serverTotal}`);
+
+    // Clean up pending record (fire-and-forget)
+    db.query("DELETE FROM pending_razorpay_orders WHERE razorpay_order_id = $1", [razorpay_order_id])
+      .catch(() => {});
+
+    createNotification({
+      eventType: "new_order",
+      priority:  "high",
+      title:     "New Order Received (Razorpay)",
+      message:   `Order ${orderId} placed via Razorpay for ₹${serverTotal}`,
+      entityType: "orders",
+      entityId:   orderId,
+      link:       `/admin/orders/${orderId}`,
+    });
+
+    const [orderRow, { items: fmtItems, timeline }] = await Promise.all([
+      db.query("SELECT * FROM orders WHERE id = $1", [orderId]),
+      fetchItemsAndTimeline(orderId),
+    ]);
+    console.log(`[RAZORPAY VERIFY] 201 SUCCESS — orderId=${orderId} method=${paymentMethod} userId=${userId}`);
+    console.log("=".repeat(60));
+    return res.status(201).json({
+      success: true,
+      message: "Payment verified and order placed successfully!",
+      order:   formatOrder(orderRow.rows[0], fmtItems, timeline),
+    });
+  } catch (err) {
+    await client.query("ROLLBACK");
+    if (err.status) {
+      console.log(`[RAZORPAY VERIFY] ${err.status} ERROR — ${err.message} userId=${userId}`);
+      console.log("=".repeat(60));
+      return res.status(err.status).json({ success: false, message: err.message });
+    }
+    console.error(`[RAZORPAY VERIFY] 500 ERROR — ${err.message} userId=${userId}`);
+    console.log("=".repeat(60));
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  } finally {
+    client.release();
+  }
+}
+
+// ==================================================================
+// POST /api/orders/razorpay/webhook   (NO auth — Razorpay calls directly)
+//
+// Safety net for cases where verify-payment never fires (browser closed,
+// network drop after payment succeeded). Verifies X-Razorpay-Signature
+// using the WEBHOOK secret (separate from the API key secret). On a valid
+// "payment.captured" event, creates the order if it doesn't already exist.
+//
+// IMPORTANT: This handler must receive the raw request body — it is mounted
+// in server.js BEFORE express.json() with express.raw() so the body is a
+// Buffer. The webhook secret (RAZORPAY_WEBHOOK_SECRET) must be registered
+// in the Razorpay dashboard when configuring the webhook URL.
+// ==================================================================
+async function handleRazorpayWebhook(req, res) {
+  const rawBody   = req.body;  // Buffer from express.raw()
+  const signature = req.headers["x-razorpay-signature"];
+  const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
+
+  if (!webhookSecret) {
+    console.error("[Razorpay Webhook] RAZORPAY_WEBHOOK_SECRET not configured");
+    return res.status(500).json({ success: false });
+  }
+  if (!signature) {
+    return res.status(400).json({ success: false, message: "Missing X-Razorpay-Signature" });
+  }
+  if (!Buffer.isBuffer(rawBody) || rawBody.length === 0) {
+    return res.status(400).json({ success: false, message: "Empty body" });
+  }
+
+  // Verify webhook signature using the webhook secret (NOT the API key secret)
+  const expectedSig = crypto.createHmac("sha256", webhookSecret)
+    .update(rawBody)
+    .digest("hex");
+
+  let isValid = false;
+  try {
+    const sigBuf = Buffer.from(signature, "hex");
+    const expBuf = Buffer.from(expectedSig, "hex");
+    isValid = sigBuf.length === expBuf.length && crypto.timingSafeEqual(sigBuf, expBuf);
+  } catch (_) {
+    isValid = false;
+  }
+
+  if (!isValid) {
+    console.error("[Razorpay Webhook] Invalid signature — request rejected");
+    return res.status(400).json({ success: false, message: "Invalid signature" });
+  }
+
+  let event;
+  try {
+    event = JSON.parse(rawBody.toString("utf8"));
+  } catch (_) {
+    return res.status(400).json({ success: false, message: "Invalid JSON body" });
+  }
+
+  // Only act on payment.captured; acknowledge all other events with 200
+  if (event.event !== "payment.captured") {
+    return res.status(200).json({ success: true, message: "Event acknowledged" });
+  }
+
+  const rpOrderId   = event.payload?.payment?.entity?.order_id;
+  const rpPaymentId = event.payload?.payment?.entity?.id;
+  const rpMethod    = event.payload?.payment?.entity?.method;
+
+  if (!rpOrderId || !rpPaymentId) {
+    console.error("[Razorpay Webhook] payment.captured event missing order_id or payment_id");
+    return res.status(400).json({ success: false });
+  }
+
+  // Idempotency: order already created by verify-payment (happy path)
+  const existingRes = await db.query(
+    "SELECT id FROM orders WHERE razorpay_order_id = $1 OR razorpay_payment_id = $2",
+    [rpOrderId, rpPaymentId]
+  );
+  if (existingRes.rows.length > 0) {
+    console.log({ route: "Razorpay Webhook", event: "payment.captured", status: "order_already_exists", rpOrderId });
+    return res.status(200).json({ success: true, message: "Order already exists" });
+  }
+
+  // Fallback path: verify-payment never fired, create order from pending data
+  const pendingRes = await db.query(
+    "SELECT * FROM pending_razorpay_orders WHERE razorpay_order_id = $1",
+    [rpOrderId]
+  );
+  if (pendingRes.rows.length === 0) {
+    console.error({ route: "Razorpay Webhook", event: "payment.captured", error: "No pending order data found", rpOrderId });
+    // Return 200 to prevent Razorpay retries — requires manual intervention
+    return res.status(200).json({ success: true, message: "No pending order data; manual review required" });
+  }
+
+  const pending = pendingRes.rows[0];
+  const paymentMethod = rpMethod ? `razorpay_${rpMethod}` : "razorpay_upi";
+
+  const userRes = await db.query("SELECT email FROM users WHERE id = $1", [pending.user_id]);
+  const userEmail = userRes.rows[0]?.email || null;
+
+  const client = await db.getClient();
+  try {
+    await client.query("BEGIN");
+
+    const { orderId, serverTotal } = await _createOrderCore(client, {
+      userId:            pending.user_id,
+      userEmail,
+      items:             pending.items,
+      address:           pending.address,
+      couponApplied:     pending.coupon_applied,
+      paymentMethod,
+      paymentStatus:     "paid",
+      razorpayOrderId:   rpOrderId,
+      razorpayPaymentId: rpPaymentId,
+      razorpaySignature: null, // webhook fallback — no client signature available
+    });
+
+    await client.query("COMMIT");
+
+    db.query("DELETE FROM pending_razorpay_orders WHERE razorpay_order_id = $1", [rpOrderId])
+      .catch(() => {});
+
+    console.log({ route: "Razorpay Webhook", event: "payment.captured", orderId, rpOrderId, status: "order_created_via_webhook_fallback" });
+
+    createNotification({
+      eventType:  "new_order",
+      priority:   "high",
+      title:      "New Order (Webhook Fallback)",
+      message:    `Order ${orderId} created via Razorpay webhook fallback for ₹${serverTotal}`,
+      entityType: "orders",
+      entityId:   orderId,
+      link:       `/admin/orders/${orderId}`,
+    });
+
+    return res.status(200).json({ success: true, message: "Order created via webhook" });
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error({ route: "Razorpay Webhook", event: "payment.captured", error: err.message, rpOrderId });
+    // Return 500 so Razorpay retries on transient errors
+    return res.status(500).json({ success: false });
+  } finally {
+    client.release();
+  }
+}
+
 module.exports = {
   checkout,
   submitUpiReference,
@@ -955,5 +1477,9 @@ module.exports = {
   adminGetOrderById,
   adminUpdateStatus,
   adminGetReplacements,
-  adminUpdateReplacement
+  adminUpdateReplacement,
+  // Razorpay
+  createRazorpayOrder,
+  verifyRazorpayPayment,
+  handleRazorpayWebhook,
 };

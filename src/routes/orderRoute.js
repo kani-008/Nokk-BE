@@ -13,6 +13,8 @@ const {
   adminUpdateStatus,
   adminGetReplacements,
   adminUpdateReplacement,
+  createRazorpayOrder,
+  verifyRazorpayPayment,
 } = require("../controllers/orderController.js");
 
 const authenticate = require("../middleware/auth.js");
@@ -25,6 +27,12 @@ router.get("/get-my-orders", authenticate, getMyOrders);
 router.get("/get-my-order", authenticate, getMyOrderById); // ?id=
 router.post("/cancel-my-order", authenticate, cancelMyOrder); // id -> body
 router.post("/request-replacement", authenticate, requestReplacement); // id -> body
+
+// Razorpay (login required)
+// Note: POST /api/orders/razorpay/webhook is mounted in server.js BEFORE
+//       express.json() so it receives the raw body for signature verification.
+router.post("/razorpay/create-order", authenticate, createRazorpayOrder);
+router.post("/razorpay/verify-payment", authenticate, verifyRazorpayPayment);
 
 // Admin
 router.get("/admin/get-all", authenticate, isAdmin, adminGetAllOrders);
