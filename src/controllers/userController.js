@@ -115,7 +115,7 @@ async function getUserById(req, res) {
     // Addresses — every column
     const addrRes = await db.query(
       `SELECT id, label, full_name, phone, address_line1, address_line2,
-              city, state, pincode, is_default, created_at, updated_at
+              taluk, city, state, pincode, is_default, created_at, updated_at
        FROM addresses WHERE user_id = $1 ORDER BY is_default DESC, created_at DESC`,
       [id]
     );
@@ -356,7 +356,7 @@ async function getMyProfile(req, res) {
 
     const addrRes = await db.query(
       `SELECT id, label, full_name, phone, address_line1, address_line2,
-              city, state, pincode, is_default, created_at, updated_at
+              taluk, city, state, pincode, is_default, created_at, updated_at
        FROM addresses WHERE user_id = $1 ORDER BY is_default DESC, created_at DESC`,
       [req.user.id]
     );
@@ -477,7 +477,7 @@ async function getMyAddresses(req, res) {
   try {
     const result = await db.query(
       `SELECT id, label, full_name, phone, address_line1, address_line2,
-              city, state, pincode, is_default, created_at, updated_at
+              taluk, city, state, pincode, is_default, created_at, updated_at
        FROM addresses WHERE user_id = $1
        ORDER BY is_default DESC, created_at DESC`,
       [req.user.id]
@@ -494,7 +494,7 @@ async function getMyAddresses(req, res) {
 // ADDRESSES — POST /api/users/me/addresses
 // ==================================================================
 async function addAddress(req, res) {
-  const { label, fullName, phone, addressLine1, addressLine2, city, state, pincode, isDefault } = req.body;
+  const { label, fullName, phone, addressLine1, addressLine2, taluk, city, state, pincode, isDefault } = req.body;
   console.log({ route: "POST /api/users/me/addresses", userId: req.user?.id, label, fullName, phone, addressLine1, city, state, pincode, isDefault, status: "adding address" });
 
   if (!fullName || !phone || !addressLine1 || !city || !pincode) {
@@ -520,10 +520,10 @@ async function addAddress(req, res) {
 
     const result = await db.query(
       `INSERT INTO addresses
-         (user_id, label, full_name, phone, address_line1, address_line2, city, state, pincode, is_default)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+         (user_id, label, full_name, phone, address_line1, address_line2, taluk, city, state, pincode, is_default)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
        RETURNING id, label, full_name, phone, address_line1, address_line2,
-                 city, state, pincode, is_default, created_at, updated_at`,
+                 taluk, city, state, pincode, is_default, created_at, updated_at`,
       [
         req.user.id,
         label        || "Home",
@@ -531,6 +531,7 @@ async function addAddress(req, res) {
         phone.trim(),
         addressLine1,
         addressLine2 || null,
+        taluk        || "",
         city,
         state        || "Tamil Nadu",
         pincode,
@@ -550,7 +551,7 @@ async function addAddress(req, res) {
 // ADDRESSES — PUT /api/users/me/addresses/:addressId
 // ==================================================================
 async function updateAddress(req, res) {
-  const { addressId, label, fullName, phone, addressLine1, addressLine2, city, state, pincode, isDefault } = req.body;
+  const { addressId, label, fullName, phone, addressLine1, addressLine2, taluk, city, state, pincode, isDefault } = req.body;
   console.log({ route: "PUT /api/users/me/update-address", userId: req.user?.id, addressId, label, fullName, phone, addressLine1, city, state, pincode, isDefault, status: "updating address" });
 
   try {
@@ -577,20 +578,22 @@ async function updateAddress(req, res) {
         phone         = COALESCE($3, phone),
         address_line1 = COALESCE($4, address_line1),
         address_line2 = COALESCE($5, address_line2),
-        city          = COALESCE($6, city),
-        state         = COALESCE($7, state),
-        pincode       = COALESCE($8, pincode),
-        is_default    = COALESCE($9, is_default),
+        taluk         = COALESCE($6, taluk),
+        city          = COALESCE($7, city),
+        state         = COALESCE($8, state),
+        pincode       = COALESCE($9, pincode),
+        is_default    = COALESCE($10, is_default),
         updated_at    = NOW()
-       WHERE id = $10 AND user_id = $11
+       WHERE id = $11 AND user_id = $12
        RETURNING id, label, full_name, phone, address_line1, address_line2,
-                 city, state, pincode, is_default, created_at, updated_at`,
+                 taluk, city, state, pincode, is_default, created_at, updated_at`,
       [
         label        || null,
         fullName     || null,
         phone        ? phone.trim() : null,
         addressLine1 || null,
         addressLine2 !== undefined ? addressLine2 : null,
+        taluk        !== undefined ? taluk : null,
         city         || null,
         state        || null,
         pincode      || null,

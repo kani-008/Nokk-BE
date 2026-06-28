@@ -25,6 +25,7 @@ const dashboardRoute = require("./src/routes/dashboardRoute.js");
 const reportRoute = require("./src/routes/reportRoute.js");
 const uploadRoute = require("./src/routes/uploadRoute.js");
 const notificationRoute = require("./src/routes/notificationRoute.js");
+const pincodeRoute = require("./src/routes/pincodeRoute.js");
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -87,6 +88,7 @@ app.use("/api/dashboard", dashboardRoute); // KPIs, reports, charts (admin only)
 app.use("/api/reports", reportRoute); // exportable reports (admin only)
 app.use("/api/upload", uploadRoute); // file upload to Supabase Storage (admin only)
 app.use("/api/notifications", notificationRoute); // notifications (customer) | send/manage (admin)
+app.use("/api/pincode", pincodeRoute);           // offline pincode→district/state/taluk lookup
 
 // ── 404 ───────────────────────────────────────────────────────────
 app.use((req, res) => {

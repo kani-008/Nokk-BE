@@ -287,7 +287,7 @@ async function checkout(req, res) {
        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending',$11,$12,$13,$14,$15,$16,$17)`,
       [
         orderId, req.user.id,
-        address.fullName, req.user.email, address.phone,
+        address.fullName, req.user.email || null, address.phone,
         serverSubtotal, serverDeliveryCharge, serverDiscount,
         couponApplied ? String(couponApplied).trim().toUpperCase() : null, serverTotal,
         paymentMethod, paymentStatus,
