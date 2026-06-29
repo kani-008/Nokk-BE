@@ -244,8 +244,9 @@ async function removeCartItem(req, res) {
       [itemId, req.user.id]
     );
     if (result.rows.length === 0) {
-      console.log({ route: "DELETE /api/cart/remove-item", userId: req.user.id, itemId, status: 404, message: "Cart item not found" });
-      return res.status(404).json({ success: false, message: "Cart item not found" });
+      const cart = await fetchCart(req.user.id);
+      console.log({ route: "DELETE /api/cart/remove-item", userId: req.user.id, itemId, status: 200, message: "Cart item already removed" });
+      return res.json({ success: true, message: "Item already removed", cart });
     }
     const deletedVariantId = result.rows[0]?.variant_id;
     console.log(`[Cart Backend Log] Item is deleted with item code: ${deletedVariantId} (User: ${req.user.id})`);
