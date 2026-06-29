@@ -1,11 +1,9 @@
 const db = require("../config/db.js");
 
-// Live offers table columns (from current_schema.sql dump):
+// Live offers table columns:
 // id, name, description, discount_value, product_id, category_id,
 // min_order_value, max_discount, start_date, end_date, is_active,
-// created_at, updated_at
-// NOTE: no offer_type column in live DB — discount_value is always a flat/percent
-// based on context. We treat it as a percentage if <= 100 and product/category scoped.
+// created_at, updated_at, offer_type, applies_to, code
 
 const num = (v) => parseFloat(v) || 0;
 
@@ -29,7 +27,10 @@ function formatOffer(o) {
     isActive: o.is_active,
     isLive: o.is_active && started && notEnded,
     createdAt: o.created_at,
-    updatedAt: o.updated_at
+    updatedAt: o.updated_at,
+    offerType: o.offer_type,
+    appliesTo: o.applies_to,
+    code: o.code
   };
 }
 
@@ -94,6 +95,10 @@ async function getAllOffers(req, res) {
 async function getOfferById(req, res) {
   const { id } = req.query;
   console.log({ route: "GET /api/offers/get-by-id", offerId: id, status: "fetching offer by id" });
+  if (!id) {
+    console.log({ route: "GET /api/offers/get-by-id", status: 400, message: "id is required" });
+    return res.status(400).json({ success: false, message: "id is required" });
+  }
   try {
     const result = await db.query(
       `SELECT o.*, p.name_en AS product_name, c.name_en AS category_name
@@ -119,44 +124,100 @@ async function getOfferById(req, res) {
 // ADMIN — POST /api/offers
 // Create a new offer campaign.
 // Body: { name, description?, discountValue, productId?, categoryId?,
-//         minOrderValue?, maxDiscount?, startDate?, endDate?, isActive? }
+//         minOrderValue?, maxDiscount?, startDate?, endDate?, isActive?,
+//         offerType?, appliesTo?, code? }
 // ==================================================================
 async function createOffer(req, res) {
   const {
     name, description, discountValue,
     productId, categoryId,
     minOrderValue, maxDiscount,
-    startDate, endDate, isActive
+    startDate, endDate, isActive,
+    offerType, appliesTo, code
   } = req.body;
-  console.log({ route: "POST /api/offers", body: { name, discountValue, productId, categoryId, minOrderValue, maxDiscount, startDate, endDate, isActive }, status: "creating offer" });
+  console.log({ route: "POST /api/offers", body: { name, discountValue, productId, categoryId, minOrderValue, maxDiscount, startDate, endDate, isActive, offerType, appliesTo, code }, status: "creating offer" });
 
   if (!name || discountValue == null) {
     console.log({ route: "POST /api/offers", status: 400, message: "name and discountValue are required" });
     return res.status(400).json({ success: false, message: "name and discountValue are required" });
   }
-  if (discountValue <= 0 || discountValue > 100) {
-    console.log({ route: "POST /api/offers", status: 400, message: "discountValue must be between 1 and 100" });
-    return res.status(400).json({ success: false, message: "discountValue must be between 1 and 100 (percent)" });
+
+  const type = offerType || "percentage";
+  const val = parseFloat(discountValue) || 0;
+  if (type === "percentage") {
+    if (val <= 0 || val > 100) {
+      console.log({ route: "POST /api/offers", status: 400, message: "discountValue must be between 1 and 100" });
+      return res.status(400).json({ success: false, message: "discountValue must be between 1 and 100 (percent)" });
+    }
+  } else if (type === "flat") {
+    if (val <= 0 || val > 10000) {
+      console.log({ route: "POST /api/offers", status: 400, message: "discountValue must be greater than 0 and less than or equal to ₹10,000" });
+      return res.status(400).json({ success: false, message: "discountValue must be greater than 0 and less than or equal to ₹10,000" });
+    }
+  } else {
+    return res.status(400).json({ success: false, message: "Invalid offerType" });
+  }
+
+  const applies = appliesTo || "all";
+  if (applies === "product") {
+    if (!productId) {
+      return res.status(400).json({ success: false, message: "Select a product" });
+    }
+    if (categoryId) {
+      return res.status(400).json({ success: false, message: "Category must not be set for product-specific offers" });
+    }
+  } else if (applies === "category") {
+    if (!categoryId) {
+      return res.status(400).json({ success: false, message: "Select a category" });
+    }
+    if (productId) {
+      return res.status(400).json({ success: false, message: "Product must not be set for category-specific offers" });
+    }
+  } else if (applies === "all") {
+    if (productId || categoryId) {
+      return res.status(400).json({ success: false, message: "Product and category must not be set for store-wide offers" });
+    }
+  } else {
+    return res.status(400).json({ success: false, message: "Invalid appliesTo" });
+  }
+
+  let upperCode = null;
+  if (code && String(code).trim()) {
+    upperCode = String(code).trim().toUpperCase();
+    try {
+      const dup = await db.query("SELECT id FROM offers WHERE UPPER(code) = $1", [upperCode]);
+      if (dup.rows.length > 0) {
+        console.log({ route: "POST /api/offers", code: upperCode, status: 409, message: "offer code already exists" });
+        return res.status(409).json({ success: false, message: "Offer code already exists" });
+      }
+    } catch (err) {
+      console.error({ route: "POST /api/offers", error: err.message });
+      return res.status(500).json({ success: false, message: "Internal server error" });
+    }
   }
 
   try {
     const result = await db.query(
       `INSERT INTO offers
          (name, description, discount_value, product_id, category_id,
-          min_order_value, max_discount, start_date, end_date, is_active)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+          min_order_value, max_discount, start_date, end_date, is_active,
+          offer_type, applies_to, code)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
        RETURNING *`,
       [
         name.trim(),
         description || null,
         discountValue,
-        productId || null,
-        categoryId || null,
+        applies === "product" ? productId : null,
+        applies === "category" ? categoryId : null,
         minOrderValue || 0,
         maxDiscount || null,
         startDate || null,
         endDate || null,
-        isActive ?? true
+        isActive ?? true,
+        type,
+        applies,
+        upperCode
       ]
     );
     console.log({ route: "POST /api/offers", status: 201, offerId: result.rows[0].id });
@@ -176,46 +237,117 @@ async function updateOffer(req, res) {
     id, name, description, discountValue,
     productId, categoryId,
     minOrderValue, maxDiscount,
-    startDate, endDate, isActive
+    startDate, endDate, isActive,
+    offerType, appliesTo, code
   } = req.body;
-  console.log({ route: "PUT /api/offers/update-offer", offerId: id, body: { name, description, discountValue, productId, categoryId, minOrderValue, maxDiscount, startDate, endDate, isActive }, status: "updating offer" });
+  console.log({ route: "PUT /api/offers/update-offer", offerId: id, body: { name, description, discountValue, productId, categoryId, minOrderValue, maxDiscount, startDate, endDate, isActive, offerType, appliesTo, code }, status: "updating offer" });
+
+  if (!id) {
+    console.log({ route: "PUT /api/offers/update-offer", status: 400, message: "id is required" });
+    return res.status(400).json({ success: false, message: "id is required" });
+  }
 
   try {
-    const existing = await db.query("SELECT id FROM offers WHERE id = $1", [id]);
-    if (existing.rows.length === 0) {
+    const existingRes = await db.query("SELECT * FROM offers WHERE id = $1", [id]);
+    if (existingRes.rows.length === 0) {
       console.log({ route: "PUT /api/offers/update-offer", offerId: id, status: 404, message: "Offer not found" });
       return res.status(404).json({ success: false, message: "Offer not found" });
     }
+    const existing = existingRes.rows[0];
+
+    const currentType = offerType !== undefined ? offerType : existing.offer_type;
+    const currentVal = discountValue !== undefined ? parseFloat(discountValue) : parseFloat(existing.discount_value);
+
+    if (currentType === "percentage") {
+      if (currentVal <= 0 || currentVal > 100) {
+        return res.status(400).json({ success: false, message: "discountValue must be between 1 and 100 (percent)" });
+      }
+    } else if (currentType === "flat") {
+      if (currentVal <= 0 || currentVal > 10000) {
+        return res.status(400).json({ success: false, message: "discountValue must be greater than 0 and less than or equal to ₹10,000" });
+      }
+    } else {
+      return res.status(400).json({ success: false, message: "Invalid offerType" });
+    }
+
+    const currentApplies = appliesTo !== undefined ? appliesTo : existing.applies_to;
+    let finalProdId = productId !== undefined ? (productId || null) : existing.product_id;
+    let finalCatId = categoryId !== undefined ? (categoryId || null) : existing.category_id;
+
+    if (currentApplies === "all") {
+      finalProdId = null;
+      finalCatId = null;
+    } else if (currentApplies === "product") {
+      finalCatId = null;
+      if (!finalProdId) {
+        return res.status(400).json({ success: false, message: "Select a product" });
+      }
+    } else if (currentApplies === "category") {
+      finalProdId = null;
+      if (!finalCatId) {
+        return res.status(400).json({ success: false, message: "Select a category" });
+      }
+    } else {
+      return res.status(400).json({ success: false, message: "Invalid appliesTo" });
+    }
+
+    let upperCode = existing.code;
+    if (code !== undefined) {
+      if (code && String(code).trim()) {
+        upperCode = String(code).trim().toUpperCase();
+        const dup = await db.query("SELECT id FROM offers WHERE UPPER(code) = $1 AND id != $2", [upperCode, id]);
+        if (dup.rows.length > 0) {
+          return res.status(409).json({ success: false, message: "Offer code already exists" });
+        }
+      } else {
+        upperCode = null;
+      }
+    }
+
+    const finalName = name !== undefined ? name.trim() : existing.name;
+    const finalDesc = description !== undefined ? (description || null) : existing.description;
+    const finalMinOrder = minOrderValue !== undefined ? minOrderValue : existing.min_order_value;
+    const finalMaxDiscount = maxDiscount !== undefined ? (maxDiscount || null) : existing.max_discount;
+    const finalStartDate = startDate !== undefined ? (startDate || null) : existing.start_date;
+    const finalEndDate = endDate !== undefined ? (endDate || null) : existing.end_date;
+    const finalIsActive = isActive !== undefined ? isActive : existing.is_active;
 
     const result = await db.query(
       `UPDATE offers SET
-         name            = COALESCE($1,  name),
-         description     = COALESCE($2,  description),
-         discount_value  = COALESCE($3,  discount_value),
-         product_id      = COALESCE($4,  product_id),
-         category_id     = COALESCE($5,  category_id),
-         min_order_value = COALESCE($6,  min_order_value),
-         max_discount    = COALESCE($7,  max_discount),
-         start_date      = COALESCE($8,  start_date),
-         end_date        = COALESCE($9,  end_date),
-         is_active       = COALESCE($10, is_active),
+         name            = $1,
+         description     = $2,
+         discount_value  = $3,
+         product_id      = $4,
+         category_id     = $5,
+         min_order_value = $6,
+         max_discount    = $7,
+         start_date      = $8,
+         end_date        = $9,
+         is_active       = $10,
+         offer_type      = $11,
+         applies_to      = $12,
+         code            = $13,
          updated_at      = NOW()
-       WHERE id = $11
+       WHERE id = $14
        RETURNING *`,
       [
-        name || null,
-        description !== undefined ? description : null,
-        discountValue !== undefined ? discountValue : null,
-        productId !== undefined ? productId : null,
-        categoryId !== undefined ? categoryId : null,
-        minOrderValue !== undefined ? minOrderValue : null,
-        maxDiscount !== undefined ? maxDiscount : null,
-        startDate !== undefined ? startDate : null,
-        endDate !== undefined ? endDate : null,
-        isActive !== undefined ? isActive : null,
+        finalName,
+        finalDesc,
+        currentVal,
+        finalProdId,
+        finalCatId,
+        finalMinOrder,
+        finalMaxDiscount,
+        finalStartDate,
+        finalEndDate,
+        finalIsActive,
+        currentType,
+        currentApplies,
+        upperCode,
         id
       ]
     );
+
     console.log({ route: "PUT /api/offers/update-offer", offerId: id, status: 200 });
     return res.json({ success: true, message: "Offer updated", offer: formatOffer(result.rows[0]) });
   } catch (err) {
@@ -230,6 +362,9 @@ async function updateOffer(req, res) {
 async function deleteOffer(req, res) {
   const { id } = req.body;
   console.log({ route: "DELETE /api/offers/delete-offer", offerId: id, status: "deleting offer" });
+  if (!id) {
+    return res.status(400).json({ success: false, message: "id is required" });
+  }
   try {
     const result = await db.query(
       "DELETE FROM offers WHERE id = $1 RETURNING id", [id]
