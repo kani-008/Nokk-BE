@@ -116,37 +116,126 @@ async function getSummary(req, res) {
 }
 
 // ==================================================================
-// GET /api/dashboard/revenue-chart?period=daily|weekly|monthly
+// GET /api/dashboard/revenue-chart?period=weekly|monthly|yearly
 // Revenue + order count over time for the chart.
-// Default: last 30 days (daily).
+// All periods are calendar-scoped (current week/month/year), not rolling.
+// Zero-filled via generate_series so every expected bucket is always present.
+//
+// weekly  → 7 rows, one per day of the current Mon–Sun calendar week
+// monthly → 4 or 5 weekly buckets within the current calendar month
+//            (partial 5th week merged into week 4 — always exactly 4 rows)
+// yearly  → 12 rows, one per month of the current calendar year
 // ==================================================================
 async function getRevenueChart(req, res) {
-  const period = req.query.period || "daily";
+  const period = req.query.period || "weekly";
   console.log({ route: "GET /api/dashboard/revenue-chart", period, status: "fetching chart data" });
 
-  const ALLOWED_PERIODS = { daily: "day", weekly: "week", monthly: "month" };
-  const trunc = ALLOWED_PERIODS[period];
-  if (!trunc) {
-    return res.status(400).json({ success: false, message: "period must be daily, weekly, or monthly" });
+  if (!["weekly", "monthly", "yearly"].includes(period)) {
+    return res.status(400).json({ success: false, message: "period must be weekly, monthly, or yearly" });
   }
 
-  // Interval rows — kept as integers fed via parameter to avoid any interpolation
-  const intervalDays = { daily: 30, weekly: 84, monthly: 365 }; // 84d ≈ 12 weeks
-  const days = intervalDays[period];
-
   try {
-    const result = await db.query(`
-      SELECT
-        date_trunc($1, created_at)   AS period,
-        COUNT(*)                     AS orders,
-        COALESCE(SUM(total), 0)      AS revenue,
-        COALESCE(SUM(discount), 0)   AS discount
-      FROM orders
-      WHERE created_at >= NOW() - ($2 || ' days')::interval
-        AND status NOT IN ('cancelled')
-      GROUP BY date_trunc($1, created_at)
-      ORDER BY period ASC
-    `, [trunc, days]);
+    let result;
+
+    if (period === "weekly") {
+      // Every day of the current Mon–Sun calendar week, zero-filled
+      result = await db.query(`
+        WITH scaffold AS (
+          SELECT gs::date AS day
+          FROM generate_series(
+            date_trunc('week', NOW()),
+            date_trunc('week', NOW()) + INTERVAL '6 days',
+            '1 day'
+          ) gs
+        ),
+        agg AS (
+          SELECT
+            created_at::date               AS day,
+            COUNT(*)                       AS orders,
+            COALESCE(SUM(total), 0)        AS revenue,
+            COALESCE(SUM(discount), 0)     AS discount
+          FROM orders
+          WHERE created_at >= date_trunc('week', NOW())
+            AND created_at <  date_trunc('week', NOW()) + INTERVAL '7 days'
+            AND status NOT IN ('cancelled')
+          GROUP BY created_at::date
+        )
+        SELECT
+          s.day                            AS period,
+          COALESCE(a.orders, 0)::int       AS orders,
+          COALESCE(a.revenue, 0)::numeric  AS revenue,
+          COALESCE(a.discount, 0)::numeric AS discount
+        FROM scaffold s
+        LEFT JOIN agg a ON a.day = s.day
+        ORDER BY s.day ASC
+      `);
+
+    } else if (period === "monthly") {
+      // 4 weekly buckets within the current calendar month.
+      // Week 1 = days 1-7, week 2 = 8-14, week 3 = 15-21, week 4 = 22-end.
+      result = await db.query(`
+        WITH scaffold AS (
+          SELECT generate_series(1, 4) AS week_num
+        ),
+        agg AS (
+          SELECT
+            LEAST(
+              CEIL(EXTRACT(DAY FROM created_at) / 7.0)::int,
+              4
+            )                              AS week_num,
+            COUNT(*)                       AS orders,
+            COALESCE(SUM(total), 0)        AS revenue,
+            COALESCE(SUM(discount), 0)     AS discount
+          FROM orders
+          WHERE created_at >= date_trunc('month', NOW())
+            AND created_at <  date_trunc('month', NOW()) + INTERVAL '1 month'
+            AND status NOT IN ('cancelled')
+          GROUP BY LEAST(CEIL(EXTRACT(DAY FROM created_at) / 7.0)::int, 4)
+        )
+        SELECT
+          (date_trunc('month', NOW()) + ((s.week_num - 1) * 7 || ' days')::interval)::date AS period,
+          s.week_num,
+          COALESCE(a.orders, 0)::int       AS orders,
+          COALESCE(a.revenue, 0)::numeric  AS revenue,
+          COALESCE(a.discount, 0)::numeric AS discount
+        FROM scaffold s
+        LEFT JOIN agg a ON a.week_num = s.week_num
+        ORDER BY s.week_num ASC
+      `);
+
+    } else {
+      // yearly — all 12 months of the current calendar year, zero-filled
+      result = await db.query(`
+        WITH scaffold AS (
+          SELECT gs AS month_start
+          FROM generate_series(
+            date_trunc('year', NOW()),
+            date_trunc('year', NOW()) + INTERVAL '11 months',
+            '1 month'
+          ) gs
+        ),
+        agg AS (
+          SELECT
+            date_trunc('month', created_at) AS month_start,
+            COUNT(*)                        AS orders,
+            COALESCE(SUM(total), 0)         AS revenue,
+            COALESCE(SUM(discount), 0)      AS discount
+          FROM orders
+          WHERE created_at >= date_trunc('year', NOW())
+            AND created_at <  date_trunc('year', NOW()) + INTERVAL '1 year'
+            AND status NOT IN ('cancelled')
+          GROUP BY date_trunc('month', created_at)
+        )
+        SELECT
+          s.month_start                    AS period,
+          COALESCE(a.orders, 0)::int       AS orders,
+          COALESCE(a.revenue, 0)::numeric  AS revenue,
+          COALESCE(a.discount, 0)::numeric AS discount
+        FROM scaffold s
+        LEFT JOIN agg a ON a.month_start = s.month_start
+        ORDER BY s.month_start ASC
+      `);
+    }
 
     console.log({ route: "GET /api/dashboard/revenue-chart", period, status: 200, count: result.rows.length });
     return res.json({

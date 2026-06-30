@@ -24,7 +24,7 @@ function verifyAccessToken(token) {
   try {
     return jwt.verify(token, ACCESS_TOKEN_SECRET);
   } catch (err) {
-    const error = new Error("Invalid access token");
+    const error = new Error("Invalid access token");  
     error.name  = err.name;   // TokenExpiredError | JsonWebTokenError
     throw error;
   }

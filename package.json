@@ -2,7 +2,7 @@
   "name": "backend",
   "version": "1.0.0",
   "description": "Backend API for NammaOorKaruvattuKadai",
-  "main": "index.js",
+  "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js"
@@ -21,4 +21,4 @@
     "razorpay": "^2.9.6",
     "twilio": "^6.0.2"
   }
-}
+} 

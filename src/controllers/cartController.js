@@ -123,22 +123,7 @@ async function addToCart(req, res) {
 
     const cartId = await getOrCreateCart(req.user.id);
 
-    // 2. Check existing qty in cart so we can enforce stock cap
-    const existing = await db.query(
-      `SELECT id, quantity FROM cart_items WHERE cart_id = $1 AND variant_id = $2`,
-      [cartId, variantId]
-    );
-    const currentQty = existing.rows.length > 0 ? existing.rows[0].quantity : 0;
-    const newQty = currentQty + quantity;
-
-    if (newQty > varRes.rows[0].stock_qty) {
-      return res.status(400).json({
-        success: false,
-        message: `Only ${varRes.rows[0].stock_qty} unit(s) available`
-      });
-    }
-
-    // 3. Upsert — insert or increment quantity atomically
+    // 2. Upsert — insert or increment quantity atomically
     await db.query(
       `INSERT INTO cart_items (cart_id, variant_id, quantity)
        VALUES ($1, $2, $3)
@@ -182,10 +167,10 @@ async function updateCartItem(req, res) {
     // Ownership check — user can only touch their own cart items
     const itemRes = await db.query(
       `SELECT ci.id, ci.variant_id, pv.stock_qty
-       FROM cart_items ci
-       JOIN carts c             ON c.id  = ci.cart_id
-       JOIN product_variants pv ON pv.id = ci.variant_id
-       WHERE ci.id = $1 AND c.user_id = $2`,
+         FROM cart_items ci
+         JOIN carts c             ON c.id  = ci.cart_id
+         JOIN product_variants pv ON pv.id = ci.variant_id
+        WHERE ci.id = $1 AND c.user_id = $2`,
       [itemId, req.user.id]
     );
 
@@ -203,9 +188,6 @@ async function updateCartItem(req, res) {
       if (stock_qty <= 0) {
         console.log({ route: "PUT /api/cart/update-item", userId: req.user.id, itemId, status: 400, message: "item out of stock" });
         return res.status(400).json({ success: false, message: "Item is out of stock" });
-      }
-      if (quantity > stock_qty) {
-        return res.status(400).json({ success: false, message: `Only ${stock_qty} unit(s) available` });
       }
       await db.query(
         "UPDATE cart_items SET quantity = $1, updated_at = NOW() WHERE id = $2",
@@ -244,8 +226,9 @@ async function removeCartItem(req, res) {
       [itemId, req.user.id]
     );
     if (result.rows.length === 0) {
-      console.log({ route: "DELETE /api/cart/remove-item", userId: req.user.id, itemId, status: 404, message: "Cart item not found" });
-      return res.status(404).json({ success: false, message: "Cart item not found" });
+      const cart = await fetchCart(req.user.id);
+      console.log({ route: "DELETE /api/cart/remove-item", userId: req.user.id, itemId, status: 200, message: "Cart item already removed" });
+      return res.json({ success: true, message: "Item already removed", cart });
     }
     const deletedVariantId = result.rows[0]?.variant_id;
     console.log(`[Cart Backend Log] Item is deleted with item code: ${deletedVariantId} (User: ${req.user.id})`);

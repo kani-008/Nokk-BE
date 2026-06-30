@@ -208,6 +208,7 @@ async function _createOrderCore(client, {
   // Validate coupon & recompute discount
   let serverDiscount = 0;
   let freeShippingCoupon = false;
+  let appliedCouponId = null;
 
   if (couponApplied) {
     console.log(`${tag} STEP 4 — validating coupon: ${couponApplied}`);
@@ -221,6 +222,7 @@ async function _createOrderCore(client, {
       const e = new Error("Invalid coupon code"); e.status = 400; throw e;
     }
     const c = couponRes.rows[0];
+    appliedCouponId = c.id;
     if (c.expiry_date && new Date(c.expiry_date) < new Date()) {
       console.log(`${tag} STEP 4 FAIL — coupon expired: ${couponCode}, expiry: ${c.expiry_date}`);
       const e = new Error("Coupon has expired"); e.status = 400; throw e;
@@ -228,6 +230,18 @@ async function _createOrderCore(client, {
     if (c.max_uses !== null && parseInt(c.usage_count) >= c.max_uses) {
       console.log(`${tag} STEP 4 FAIL — coupon usage limit reached: ${couponCode} (${c.usage_count}/${c.max_uses})`);
       const e = new Error("Coupon usage limit reached"); e.status = 400; throw e;
+    }
+    if (c.max_uses_per_user !== null) {
+      const userUsageRes = await client.query(
+        "SELECT COUNT(*) AS count FROM coupon_usages WHERE coupon_id = $1 AND user_id = $2",
+        [c.id, userId]
+      );
+      const userUsageCount = parseInt(userUsageRes.rows[0].count) || 0;
+      if (userUsageCount >= c.max_uses_per_user) {
+        console.log(`${tag} STEP 4 FAIL — per-user coupon limit reached: ${couponCode}`);
+        const e = new Error("You have reached your personal usage limit for this coupon");
+        e.status = 400; throw e;
+      }
     }
     if (serverSubtotal < parseFloat(c.min_order)) {
       console.log(`${tag} STEP 4 FAIL — subtotal ₹${serverSubtotal} below coupon min ₹${c.min_order}`);
@@ -310,12 +324,12 @@ async function _createOrderCore(client, {
   }
 
   // Track coupon usage so max_uses limits actually work
-  if (couponApplied) {
+  if (couponApplied && appliedCouponId) {
     await client.query(
-      "UPDATE coupons SET usage_count = usage_count + 1 WHERE code = $1",
-      [String(couponApplied).trim().toUpperCase()]
+      "INSERT INTO coupon_usages (coupon_id, user_id, order_id) VALUES ($1, $2, $3)",
+      [appliedCouponId, userId, orderId]
     );
-    console.log(`${tag} STEP 8 — coupon usage incremented: ${couponApplied}`);
+    console.log(`${tag} STEP 8 — coupon usage tracked in coupon_usages: ${couponApplied}`);
   }
 
   // Initial timeline entry
