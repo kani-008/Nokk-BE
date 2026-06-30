@@ -1052,8 +1052,65 @@ async function deleteReview(req, res) {
   }
 }
 
+// ==================================================================
+// PUBLIC — GET /api/products/similar?productId=&limit=
+// Returns products in the same category, excluding the given product.
+// ==================================================================
+async function getSimilarProducts(req, res) {
+  const { productId, limit = 8 } = req.query;
+  if (!productId) return res.status(400).json({ success: false, message: "productId is required" });
+  try {
+    // Get the category of the product
+    const catRes = await db.query("SELECT category_id FROM products WHERE id = $1", [productId]);
+    if (!catRes.rows.length) return res.status(404).json({ success: false, message: "Product not found" });
+    const categoryId = catRes.rows[0].category_id;
+
+    let rows;
+    if (categoryId) {
+      const result = await db.query(
+        `SELECT v.* FROM v_products_with_price v
+         WHERE v.category_id = $1 AND v.id != $2 AND v.is_active = TRUE
+         ORDER BY v.is_bestseller DESC, v.avg_rating DESC NULLS LAST
+         LIMIT $3`,
+        [categoryId, productId, parseInt(limit)]
+      );
+      rows = result.rows;
+    }
+
+    // Fallback: if no same-category products, return popular products
+    if (!rows || rows.length === 0) {
+      const fallback = await db.query(
+        `SELECT v.* FROM v_products_with_price v
+         WHERE v.id != $1 AND v.is_active = TRUE
+         ORDER BY v.is_bestseller DESC, v.avg_rating DESC NULLS LAST
+         LIMIT $2`,
+        [productId, parseInt(limit)]
+      );
+      rows = fallback.rows;
+    }
+
+    const productIds = rows.map((r) => r.id);
+    let variantsByProduct = {};
+    if (productIds.length > 0) {
+      const varRes = await db.query(
+        `SELECT * FROM product_variants WHERE product_id = ANY($1) AND is_active = TRUE ORDER BY weight_grams ASC`,
+        [productIds]
+      );
+      varRes.rows.forEach((v) => {
+        if (!variantsByProduct[v.product_id]) variantsByProduct[v.product_id] = [];
+        variantsByProduct[v.product_id].push(formatVariant(v));
+      });
+    }
+    const products = rows.map((p) => formatProduct(p, variantsByProduct[p.id] || []));
+    return res.json({ success: true, products });
+  } catch (err) {
+    console.error({ route: "GET /api/products/similar", productId, error: err.message });
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+}
+
 module.exports = {
-  getAllProducts, getProductBySlug, getWeightLabels,
+  getAllProducts, getProductBySlug, getWeightLabels, getSimilarProducts,
   createProduct, updateProduct, deleteProduct,
   addVariant, updateVariant, deleteVariant,
   addImage, addImages, deleteImage,
