@@ -15,6 +15,21 @@ function verifyToken(req, res, next) {
     return res.status(401).json({ success: false, message: "Access denied: no token provided" });
   }
 
+  // Development/Testing mock bypass mapping to real seeded DB users
+  if (process.env.NODE_ENV !== "production" && (token === "dev-token" || token.startsWith("dev-token-"))) {
+    const role = token === "dev-token-admin" ? "admin" : "customer";
+    const devUserId = role === "admin"
+      ? "9323573c-3c6a-4022-a5dc-7eb671a82c64"
+      : "5cf629c4-26dd-4f8c-b357-8d5e145a8cb9";
+    const devEmail = role === "admin"
+      ? "kanishkar.m06@gmail.com"
+      : "customer@gmail.com";
+
+    req.user = { id: devUserId, email: devEmail, role: role };
+    console.log(`[auth] Dev bypass active | user: ${req.user.id} | role: ${req.user.role}`);
+    return next();
+  }
+
   try {
     req.user = jwt.verify(token, ACCESS_TOKEN_SECRET);
     console.log("Token verified | user:", req.user.id, "role:", req.user.role);
