@@ -203,7 +203,15 @@ async function _createOrderCore(client, {
   });
   const freeShippingThreshold = settings.freeShippingThreshold !== undefined ? Number(settings.freeShippingThreshold) : 499;
   const flatDeliveryCharge    = settings.flatDeliveryCharge    !== undefined ? Number(settings.flatDeliveryCharge)    : 60;
-  console.log(`${tag} STEP 3 — delivery settings: freeShippingThreshold=₹${freeShippingThreshold}, flatDeliveryCharge=₹${flatDeliveryCharge}`);
+  const minOrderValue         = settings.minOrderValue         !== undefined ? Number(settings.minOrderValue)         : 0;
+  console.log(`${tag} STEP 3 — delivery settings: freeShippingThreshold=₹${freeShippingThreshold}, flatDeliveryCharge=₹${flatDeliveryCharge}, minOrderValue=₹${minOrderValue}`);
+
+  // Enforce minimum order value (0 = no minimum)
+  if (minOrderValue > 0 && serverSubtotal < minOrderValue) {
+    console.log(`${tag} STEP 3 FAIL — subtotal ₹${serverSubtotal} below minOrderValue ₹${minOrderValue}`);
+    const e = new Error(`Minimum order value of ₹${minOrderValue} required`);
+    e.status = 400; throw e;
+  }
 
   // Validate coupon & recompute discount
   let serverDiscount = 0;
@@ -402,15 +410,19 @@ async function checkout(req, res) {
     await client.query("COMMIT");
     console.log(`[CHECKOUT] transaction committed — orderId=${orderId} total=₹${serverTotal}`);
 
-    createNotification({
-      eventType: "new_order",
-      priority: "high",
-      title: "New Order Received",
-      message: `${address.fullName} placed order ${orderId} for ₹${serverTotal}`,
-      entityType: "orders",
-      entityId: orderId,
-      link: `/admin/orders/${orderId}`,
-    });
+    const notifyCfgRes = await db.query("SELECT value FROM settings WHERE key = 'notifyOrderConfirmed'");
+    const notifyOrderConfirmed = notifyCfgRes.rows.length === 0 || notifyCfgRes.rows[0].value !== "false";
+    if (notifyOrderConfirmed) {
+      createNotification({
+        eventType: "new_order",
+        priority: "high",
+        title: "New Order Received",
+        message: `${address.fullName} placed order ${orderId} for ₹${serverTotal}`,
+        entityType: "orders",
+        entityId: orderId,
+        link: `/admin/orders/${orderId}`,
+      });
+    }
 
     const { items: fmtItems, timeline } = await fetchItemsAndTimeline(orderId);
     const orderRow = await db.query("SELECT * FROM orders WHERE id = $1", [orderId]);
@@ -665,15 +677,19 @@ async function requestReplacement(req, res) {
 
     await client.query("COMMIT");
 
-    createNotification({
-      eventType: "replacement_requested",
-      priority: "high",
-      title: "Replacement Requested",
-      message: `Customer requested replacement for order ${id}. Reason: ${reason}`,
-      entityType: "orders",
-      entityId: id,
-      link: `/admin/orders/${id}`,
-    });
+    const notifyReturnRes = await db.query("SELECT value FROM settings WHERE key = 'notifyReturnRequest'");
+    const notifyReturnRequest = notifyReturnRes.rows.length === 0 || notifyReturnRes.rows[0].value !== "false";
+    if (notifyReturnRequest) {
+      createNotification({
+        eventType: "replacement_requested",
+        priority: "high",
+        title: "Replacement Requested",
+        message: `Customer requested replacement for order ${id}. Reason: ${reason}`,
+        entityType: "orders",
+        entityId: id,
+        link: `/admin/orders/${id}`,
+      });
+    }
 
     console.log({ route: "POST /api/orders/request-replacement", userId: req.user.id, orderId: id, status: 200 });
     return res.json({ success: true, message: "Replacement request submitted successfully" });
@@ -820,15 +836,23 @@ async function adminUpdateStatus(req, res) {
 
     await client.query("COMMIT");
 
-    createNotification({
-      eventType: "order_status_changed",
-      priority: "normal",
-      title: "Order Status Updated",
-      message: `Order ${id} moved from ${currentStatus} → ${status}`,
-      entityType: "orders",
-      entityId: id,
-      link: `/admin/orders/${id}`,
-    });
+    // notifyOrderShipped gates notifications specifically for the "shipped" transition.
+    // All other status changes always fire so the admin log stays complete.
+    const shouldNotify = status !== "shipped" || await (async () => {
+      const r = await db.query("SELECT value FROM settings WHERE key = 'notifyOrderShipped'");
+      return r.rows.length === 0 || r.rows[0].value !== "false";
+    })();
+    if (shouldNotify) {
+      createNotification({
+        eventType: "order_status_changed",
+        priority: "normal",
+        title: "Order Status Updated",
+        message: `Order ${id} moved from ${currentStatus} → ${status}`,
+        entityType: "orders",
+        entityId: id,
+        link: `/admin/orders/${id}`,
+      });
+    }
 
     console.log({ route: "PUT /api/orders/admin/update-status", orderId: id, status: 200 });
     return res.json({ success: true, message: "Order updated successfully" });
@@ -1321,15 +1345,19 @@ async function verifyRazorpayPayment(req, res) {
     db.query("DELETE FROM pending_razorpay_orders WHERE razorpay_order_id = $1", [razorpay_order_id])
       .catch(() => {});
 
-    createNotification({
-      eventType: "new_order",
-      priority:  "high",
-      title:     "New Order Received (Razorpay)",
-      message:   `Order ${orderId} placed via Razorpay for ₹${serverTotal}`,
-      entityType: "orders",
-      entityId:   orderId,
-      link:       `/admin/orders/${orderId}`,
-    });
+    const notifyRpRes = await db.query("SELECT value FROM settings WHERE key = 'notifyOrderConfirmed'");
+    const notifyOrderConfirmedRp = notifyRpRes.rows.length === 0 || notifyRpRes.rows[0].value !== "false";
+    if (notifyOrderConfirmedRp) {
+      createNotification({
+        eventType: "new_order",
+        priority:  "high",
+        title:     "New Order Received (Razorpay)",
+        message:   `Order ${orderId} placed via Razorpay for ₹${serverTotal}`,
+        entityType: "orders",
+        entityId:   orderId,
+        link:       `/admin/orders/${orderId}`,
+      });
+    }
 
     const [orderRow, { items: fmtItems, timeline }] = await Promise.all([
       db.query("SELECT * FROM orders WHERE id = $1", [orderId]),
@@ -1484,15 +1512,19 @@ async function handleRazorpayWebhook(req, res) {
 
     console.log({ route: "Razorpay Webhook", event: "payment.captured", orderId, rpOrderId, status: "order_created_via_webhook_fallback" });
 
-    createNotification({
-      eventType:  "new_order",
-      priority:   "high",
-      title:      "New Order (Webhook Fallback)",
-      message:    `Order ${orderId} created via Razorpay webhook fallback for ₹${serverTotal}`,
-      entityType: "orders",
-      entityId:   orderId,
-      link:       `/admin/orders/${orderId}`,
-    });
+    const notifyWhRes = await db.query("SELECT value FROM settings WHERE key = 'notifyOrderConfirmed'");
+    const notifyOrderConfirmedWh = notifyWhRes.rows.length === 0 || notifyWhRes.rows[0].value !== "false";
+    if (notifyOrderConfirmedWh) {
+      createNotification({
+        eventType:  "new_order",
+        priority:   "high",
+        title:      "New Order (Webhook Fallback)",
+        message:    `Order ${orderId} created via Razorpay webhook fallback for ₹${serverTotal}`,
+        entityType: "orders",
+        entityId:   orderId,
+        link:       `/admin/orders/${orderId}`,
+      });
+    }
 
     return res.status(200).json({ success: true, message: "Order created via webhook" });
   } catch (err) {

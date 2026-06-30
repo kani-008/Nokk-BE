@@ -123,7 +123,33 @@ async function addToCart(req, res) {
 
     const cartId = await getOrCreateCart(req.user.id);
 
-    // 2. Upsert — insert or increment quantity atomically
+    // 2. Enforce maxCartItems — count distinct variants already in cart
+    const countRes = await db.query(
+      "SELECT COUNT(*) AS item_count FROM cart_items WHERE cart_id = $1",
+      [cartId]
+    );
+    const currentCount = parseInt(countRes.rows[0].item_count) || 0;
+
+    // Check if this variant is already in the cart (incrementing qty is fine, adding new line is gated)
+    const existsRes = await db.query(
+      "SELECT id FROM cart_items WHERE cart_id = $1 AND variant_id = $2",
+      [cartId, variantId]
+    );
+    const isNewItem = existsRes.rows.length === 0;
+
+    if (isNewItem) {
+      const maxRes = await db.query("SELECT value FROM settings WHERE key = 'maxCartItems'");
+      const maxCartItems = maxRes.rows.length > 0 ? parseInt(maxRes.rows[0].value) : 20;
+      if (maxCartItems > 0 && currentCount >= maxCartItems) {
+        console.log({ route: "POST /api/cart", userId: req.user.id, status: 400, message: `Cart limit reached (${maxCartItems} items)` });
+        return res.status(400).json({
+          success: false,
+          message: `You can only add up to ${maxCartItems} different items to your cart at once`,
+        });
+      }
+    }
+
+    // 3. Upsert — insert or increment quantity atomically
     await db.query(
       `INSERT INTO cart_items (cart_id, variant_id, quantity)
        VALUES ($1, $2, $3)

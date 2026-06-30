@@ -683,6 +683,18 @@ async function register(req, res) {
     status: "registering customer",
   });
 
+  // Check registrationsEnabled setting — default true (fail open if setting absent)
+  try {
+    const regRes = await db.query("SELECT value FROM settings WHERE key = 'registrationsEnabled'");
+    if (regRes.rows.length > 0 && regRes.rows[0].value === "false") {
+      console.log({ route: "POST /register", status: 403, message: "Registrations disabled by admin" });
+      return res.status(403).json({ success: false, message: "New sign-ups are temporarily paused. Please try again later." });
+    }
+  } catch (settingErr) {
+    console.error({ route: "POST /register", message: "Failed to read registrationsEnabled setting", error: settingErr.message });
+    // Fail open — if we can't read the setting, allow registration
+  }
+
   if (fullName && String(fullName).trim().length > 100) {
     return res.status(400).json({ success: false, message: "Name must be 100 characters or fewer" });
   }
