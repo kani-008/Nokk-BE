@@ -51,7 +51,9 @@ function formatItem(i) {
     weight: i.weight,
     price: num(i.price),
     quantity: parseInt(i.quantity),
-    total: num(i.price) * parseInt(i.quantity)
+    total: num(i.price) * parseInt(i.quantity),
+    imageUrl: i.primary_image || null,
+    slug: i.slug || null,
   };
 }
 
@@ -61,8 +63,12 @@ function formatItem(i) {
 async function fetchItemsAndTimeline(orderId) {
   const [itemsRes, timelineRes] = await Promise.all([
     db.query(
-      `SELECT id, product_id, variant_id, name_en, name_ta, weight, price, quantity
-       FROM order_items WHERE order_id = $1`,
+      `SELECT oi.id, oi.product_id, oi.variant_id, oi.name_en, oi.name_ta, oi.weight, oi.price, oi.quantity,
+              pi.image_url AS primary_image, p.slug
+       FROM order_items oi
+       JOIN products p ON p.id = oi.product_id
+       LEFT JOIN product_images pi ON pi.product_id = oi.product_id AND pi.is_primary = TRUE
+       WHERE oi.order_id = $1`,
       [orderId]
     ),
     db.query(
@@ -87,8 +93,12 @@ async function fetchItemsAndTimelinesForOrders(orderIds) {
 
   const [itemsRes, timelineRes] = await Promise.all([
     db.query(
-      `SELECT id, order_id, product_id, variant_id, name_en, name_ta, weight, price, quantity
-       FROM order_items WHERE order_id = ANY($1)`,
+      `SELECT oi.id, oi.order_id, oi.product_id, oi.variant_id, oi.name_en, oi.name_ta, oi.weight, oi.price, oi.quantity,
+              pi.image_url AS primary_image, p.slug
+       FROM order_items oi
+       JOIN products p ON p.id = oi.product_id
+       LEFT JOIN product_images pi ON pi.product_id = oi.product_id AND pi.is_primary = TRUE
+       WHERE oi.order_id = ANY($1)`,
       [orderIds]
     ),
     db.query(

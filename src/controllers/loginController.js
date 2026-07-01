@@ -59,6 +59,7 @@ function publicUser(u) {
     name: u.full_name,
     role: u.role,
     status: u.status,
+    gender: u.gender || null,
   };
 }
 
