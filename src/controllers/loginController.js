@@ -125,6 +125,14 @@ async function getlogin(req, res) {
           message: "This account has been blocked. Please contact support.",
         });
     }
+    if (user.status === "deactivated") {
+      const ok = await bcrypt.compare(password, user.password_hash || "");
+      if (!ok) {
+        return res.status(401).json({ success: false, message: "Invalid credentials" });
+      }
+      console.log({ route: "POST /user-login", identifier, status: 200, message: "DEACTIVATED" });
+      return res.json({ success: false, code: "DEACTIVATED", userId: user.id });
+    }
 
     const ok = await bcrypt.compare(password, user.password_hash || "");
     if (!ok) {
@@ -825,6 +833,54 @@ async function register(req, res) {
       .json({ success: false, message: "Internal server error" });
   }
 }
+// ==================================================================
+// POST /auth/reactivate   -> reactivate
+// Body: { identifier, password }
+// Reactivates a deactivated account after verifying credentials.
+// ==================================================================
+async function reactivate(req, res) {
+  const { identifier: rawId, password } = req.body;
+  if (!rawId || !password) {
+    return res.status(400).json({ success: false, message: "identifier and password are required" });
+  }
+  const identifier = normalizeIdentifier(rawId);
+  try {
+    const result = await db.query(
+      "SELECT * FROM users WHERE (email = $1 OR phone = $1) AND status = 'deactivated' LIMIT 1",
+      [identifier]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, message: "No deactivated account found with those credentials" });
+    }
+    const user = result.rows[0];
+    const ok = await bcrypt.compare(password, user.password_hash || "");
+    if (!ok) {
+      return res.status(401).json({ success: false, message: "Invalid credentials" });
+    }
+    await db.query("UPDATE users SET status = 'active', updated_at = NOW() WHERE id = $1", [user.id]);
+
+    const accessToken = signAccessToken({ ...user, status: "active" });
+    const refreshToken = signRefreshToken(user);
+    const expiresAt = new Date(Date.now() + REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000);
+    await db.query(
+      "INSERT INTO refresh_tokens (user_id, token, expires_at) VALUES ($1, $2, $3)",
+      [user.id, refreshToken, expiresAt]
+    );
+
+    console.log({ route: "POST /auth/reactivate", userId: user.id, status: 200 });
+    return res.json({
+      success: true,
+      message: "Account reactivated successfully",
+      accessToken,
+      refreshToken,
+      user: publicUser({ ...user, status: "active" }),
+    });
+  } catch (err) {
+    console.error({ route: "POST /auth/reactivate", status: 500, error: err.message });
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+}
+
 module.exports = {
   getlogin,
   register,
@@ -835,4 +891,5 @@ module.exports = {
   setpassword,
   refreshAccessToken,
   logout,
+  reactivate,
 };

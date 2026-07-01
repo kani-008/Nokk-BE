@@ -299,4 +299,26 @@ async function deleteCoupon(req, res) {
   }
 }
 
-module.exports = { validateCoupon, getAllCoupons, createCoupon, updateCoupon, deleteCoupon };
+// ==================================================================
+// PUBLIC — GET /api/coupons/get-public
+// Returns active, non-expired coupons (no auth required).
+// ==================================================================
+async function getPublicCoupons(req, res) {
+  console.log({ route: "GET /api/coupons/get-public", status: "fetching public coupons" });
+  try {
+    const result = await db.query(
+      `SELECT * FROM coupons
+       WHERE is_active = TRUE
+         AND (expiry_date IS NULL OR expiry_date > NOW())
+         AND (max_uses IS NULL OR usage_count < max_uses)
+       ORDER BY created_at DESC`
+    );
+    console.log({ route: "GET /api/coupons/get-public", status: 200, count: result.rows.length });
+    return res.json({ success: true, coupons: result.rows.map(formatCoupon) });
+  } catch (err) {
+    console.error({ route: "GET /api/coupons/get-public", status: 500, error: err.message });
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+}
+
+module.exports = { validateCoupon, getAllCoupons, createCoupon, updateCoupon, deleteCoupon, getPublicCoupons };

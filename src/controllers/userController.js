@@ -16,6 +16,7 @@ function publicUser(u) {
     avatarUrl:     u.avatar_url,
     role:          u.role,
     status:        u.status,
+    gender:        u.gender || null,
     emailVerified: u.email_verified,
     phoneVerified: u.phone_verified,
     authProvider:  u.auth_provider,
@@ -344,7 +345,7 @@ async function getMyProfile(req, res) {
   console.log({ route: "GET /api/users/me", userId: req.user?.id, status: "fetching own profile" });
   try {
     const userRes = await db.query(
-      `SELECT id, full_name, email, phone, avatar_url, role, status,
+      `SELECT id, full_name, email, phone, avatar_url, role, status, gender,
               email_verified, phone_verified, auth_provider, created_at, updated_at
        FROM users WHERE id = $1`,
       [req.user.id]
@@ -379,10 +380,10 @@ async function getMyProfile(req, res) {
 // Email cannot be changed here (sensitive — needs re-verification).
 // ==================================================================
 async function updateMyProfile(req, res) {
-  const { fullName, phone, avatarUrl } = req.body;
-  console.log({ route: "PUT /api/users/me", userId: req.user?.id, fullName, phone, avatarUrl, status: "updating own profile" });
+  const { fullName, phone, avatarUrl, gender } = req.body;
+  console.log({ route: "PUT /api/users/me", userId: req.user?.id, fullName, phone, avatarUrl, gender, status: "updating own profile" });
 
-  if (!fullName && !phone && !avatarUrl) {
+  if (!fullName && !phone && !avatarUrl && gender === undefined) {
     console.log({ route: "PUT /api/users/me", userId: req.user?.id, status: 400, message: "Nothing to update" });
     return res.status(400).json({ success: false, message: "Nothing to update" });
   }
@@ -404,14 +405,16 @@ async function updateMyProfile(req, res) {
         full_name  = COALESCE($1, full_name),
         phone      = COALESCE($2, phone),
         avatar_url = COALESCE($3, avatar_url),
+        gender     = COALESCE($4, gender),
         updated_at = NOW()
-       WHERE id = $4
-       RETURNING id, full_name, email, phone, avatar_url, role, status,
+       WHERE id = $5
+       RETURNING id, full_name, email, phone, avatar_url, role, status, gender,
                  email_verified, phone_verified, auth_provider, created_at, updated_at`,
       [
         fullName  || null,
         phone     ? phone.trim() : null,
         avatarUrl || null,
+        gender    || null,
         req.user.id
       ]
     );
@@ -635,6 +638,57 @@ async function deleteAddress(req, res) {
   }
 }
 
+// ==================================================================
+// SELF — POST /api/users/me/deactivate
+// Sets status=deactivated and revokes all refresh tokens.
+// ==================================================================
+async function deactivateMyAccount(req, res) {
+  console.log({ route: "POST /api/users/me/deactivate", userId: req.user?.id, status: "deactivating account" });
+  try {
+    await db.query(
+      "UPDATE users SET status = 'deactivated', updated_at = NOW() WHERE id = $1",
+      [req.user.id]
+    );
+    await db.query("DELETE FROM refresh_tokens WHERE user_id = $1", [req.user.id]);
+    console.log({ route: "POST /api/users/me/deactivate", userId: req.user?.id, status: 200 });
+    return res.json({ success: true, message: "Account deactivated" });
+  } catch (err) {
+    console.error({ route: "POST /api/users/me/deactivate", userId: req.user?.id, status: 500, error: err.message });
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+}
+
+// ==================================================================
+// SELF — POST /api/users/me/delete
+// Soft-delete: anonymizes PII, stores deletion reason, revokes tokens.
+// Order history is preserved (user_id FK stays intact).
+// ==================================================================
+async function deleteMyAccount(req, res) {
+  const { reason } = req.body;
+  console.log({ route: "POST /api/users/me/delete", userId: req.user?.id, status: "soft-deleting account" });
+  try {
+    await db.query(
+      `UPDATE users SET
+        full_name       = 'Deleted User',
+        email           = NULL,
+        phone           = NULL,
+        avatar_url      = NULL,
+        gender          = NULL,
+        status          = 'deleted',
+        deletion_reason = $1,
+        updated_at      = NOW()
+       WHERE id = $2`,
+      [reason || null, req.user.id]
+    );
+    await db.query("DELETE FROM refresh_tokens WHERE user_id = $1", [req.user.id]);
+    console.log({ route: "POST /api/users/me/delete", userId: req.user?.id, status: 200 });
+    return res.json({ success: true, message: "Account deleted" });
+  } catch (err) {
+    console.error({ route: "POST /api/users/me/delete", userId: req.user?.id, status: 500, error: err.message });
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+}
+
 module.exports = {
   // Admin
   getAllUsers,
@@ -646,6 +700,8 @@ module.exports = {
   getMyProfile,
   updateMyProfile,
   changeMyPassword,
+  deactivateMyAccount,
+  deleteMyAccount,
   // Addresses
   getMyAddresses,
   addAddress,
