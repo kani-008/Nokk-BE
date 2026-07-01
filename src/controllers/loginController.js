@@ -2,7 +2,7 @@ const bcrypt = require("bcryptjs");
 const { createNotification } = require("./notificationController.js");
 const jwt = require("jsonwebtoken");
 const db = require("../config/db.js");
-const twilio = require("twilio");
+const { sendOtp, verifyOtp } = require("../config/twofactor.js");
 
 // ------------------------------------------------------------------
 // Config (read from .env)
@@ -60,20 +60,6 @@ function publicUser(u) {
     role: u.role,
     status: u.status,
   };
-}
-
-// ------------------------------------------------------------------
-// Twilio Verify — handles OTP generation, delivery, and checking
-// ------------------------------------------------------------------
-const twilioClient = require("twilio")(
-  process.env.TWILIO_ACCOUNT_SID,
-  process.env.TWILIO_AUTH_TOKEN,
-);
-const VERIFY_SID = process.env.TWILIO_VERIFY_SERVICE_SID;
-
-// Convert any Indian phone format to E.164 (+91XXXXXXXXXX)
-function toE164(phone) {
-  return `+91${phone.replace(/\D/g, "").slice(-10)}`;
 }
 
 // ==================================================================
@@ -336,29 +322,23 @@ async function logout(req, res) {
 // ==================================================================
 async function checkPhone(req, res) {
   const phone = req.body.phone ? String(req.body.phone).trim() : "";
-  if (!phone)
-    return res
-      .status(400)
-      .json({ success: false, message: "phone is required" });
+  console.log({ route: "POST /check-phone", phone, status: "checking" });
+  if (!phone) {
+    console.log({ route: "POST /check-phone", status: 400, message: "phone is required" });
+    return res.status(400).json({ success: false, message: "phone is required" });
+  }
 
   try {
-    const result = await db.query("SELECT id FROM users WHERE phone = $1", [
-      phone,
-    ]);
+    const result = await db.query("SELECT id FROM users WHERE phone = $1", [phone]);
     if (result.rows.length > 0) {
-      return res
-        .status(409)
-        .json({
-          success: false,
-          message: "This phone number is already registered",
-        });
+      console.log({ route: "POST /check-phone", phone, status: 409, message: "phone already registered" });
+      return res.status(409).json({ success: false, message: "This phone number is already registered" });
     }
+    console.log({ route: "POST /check-phone", phone, status: 200, message: "phone available" });
     return res.json({ success: true, message: "Phone available" });
   } catch (err) {
-    console.error({ route: "POST /check-phone", phone, error: err.message });
-    return res
-      .status(500)
-      .json({ success: false, message: "Internal server error" });
+    console.error({ route: "POST /check-phone", phone, status: 500, error: err.message });
+    return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
 
@@ -383,26 +363,27 @@ async function registerOtpCreate(req, res) {
   }
 
   try {
-    const existing = await db.query("SELECT id FROM users WHERE phone = $1", [
-      phone,
-    ]);
+    const existing = await db.query("SELECT id FROM users WHERE phone = $1", [phone]);
     if (existing.rows.length > 0) {
-      return res
-        .status(409)
-        .json({
-          success: false,
-          message: "This phone number is already registered",
-        });
+      console.log({ route: "POST /register-otp", phone, status: 409, message: "phone already registered" });
+      return res.status(409).json({ success: false, message: "This phone number is already registered" });
     }
 
-    await twilioClient.verify.v2
-      .services(VERIFY_SID)
-      .verifications.create({ to: toE164(phone), channel: "sms" });
+    const sessionId = await sendOtp(phone, "nokk_register_otp");
+    await db.query(
+      "DELETE FROM otp_verifications WHERE phone = $1 AND user_id IS NULL",
+      [phone]
+    );
+    await db.query(
+      `INSERT INTO otp_verifications (user_id, phone, otp_code, verified, expires_at, session_id)
+       VALUES (NULL, $1, '', FALSE, $2, $3)`,
+      [phone, new Date(Date.now() + 10 * 60 * 1000), sessionId]
+    );
 
-    console.log({ route: "POST /register-otp", phone, status: 200 });
+    console.log({ route: "POST /register-otp", phone, status: 200, message: "OTP sent via 2Factor" });
     return res.json({ success: true, message: "OTP sent" });
   } catch (err) {
-    console.error({ route: "POST /register-otp", phone, error: err.message });
+    console.error({ route: "POST /register-otp", phone, status: 500, error: err.message });
     return res
       .status(500)
       .json({ success: false, message: "Internal server error" });
@@ -447,16 +428,21 @@ async function otpgenerate(req, res) {
           message: "No account found with this phone number",
         });
     }
+    const userId = userRes.rows[0].id;
 
-    await twilioClient.verify.v2
-      .services(VERIFY_SID)
-      .verifications.create({ to: toE164(phone), channel: "sms" });
+    const sessionId = await sendOtp(phone, "Nokk_forgot_otp");
+    await db.query("DELETE FROM otp_verifications WHERE user_id = $1", [userId]);
+    await db.query(
+      `INSERT INTO otp_verifications (user_id, phone, otp_code, verified, expires_at, session_id)
+       VALUES ($1, $2, '', FALSE, $3, $4)`,
+      [userId, phone, new Date(Date.now() + 10 * 60 * 1000), sessionId]
+    );
 
     console.log({
       route: "POST /otp-create",
       phone,
       status: 200,
-      message: "Twilio Verify OTP sent",
+      message: "2Factor OTP sent",
     });
     return res.json({ success: true, message: "OTP sent" });
   } catch (err) {
@@ -512,21 +498,18 @@ async function otpverify(req, res) {
     }
     const user = userRes.rows[0];
 
-    const check = await twilioClient.verify.v2
-      .services(VERIFY_SID)
-      .verificationChecks.create({ to: toE164(phone), code: otp });
-
-    if (check.status !== "approved") {
-      console.log({
-        route: "POST /otp-verify",
-        phone,
-        status: 400,
-        message: `OTP status: ${check.status}`,
-      });
-      return res
-        .status(400)
-        .json({ success: false, message: "Invalid or expired OTP" });
+    const pendingRow = await db.query(
+      `SELECT session_id FROM otp_verifications
+       WHERE user_id = $1 AND verified = FALSE AND expires_at > NOW()
+       ORDER BY expires_at DESC LIMIT 1`,
+      [user.id]
+    );
+    if (!pendingRow.rows.length || !pendingRow.rows[0].session_id) {
+      console.log({ route: "POST /otp-verify", phone, status: 400, message: "OTP session not found or expired" });
+      return res.status(400).json({ success: false, message: "OTP expired or not found. Please request a new one." });
     }
+    await verifyOtp(phone, pendingRow.rows[0].session_id, otp);
+    // verifyOtp throws on mismatch — reaching here means success
 
     // Write a verified record so /reset-password has a DB gate to check.
     // Clear any old sessions first so only this one is valid.
@@ -763,19 +746,26 @@ async function register(req, res) {
         console.log({ route: "POST /register", phone: normalizedPhone, status: 400, message: "otp is required" });
         return res.status(400).json({ success: false, message: "otp is required" });
       }
-      let check;
+      const regRow = await db.query(
+        `SELECT session_id FROM otp_verifications
+         WHERE phone = $1 AND user_id IS NULL AND verified = FALSE AND expires_at > NOW()
+         ORDER BY expires_at DESC LIMIT 1`,
+        [normalizedPhone]
+      );
+      if (!regRow.rows.length || !regRow.rows[0].session_id) {
+        console.log({ route: "POST /register", phone: normalizedPhone, status: 400, message: "OTP session not found or expired" });
+        return res.status(400).json({ success: false, message: "OTP expired or not found. Please request a new one." });
+      }
       try {
-        check = await twilioClient.verify.v2.services(VERIFY_SID)
-          .verificationChecks
-          .create({ to: toE164(normalizedPhone), code: String(otp).trim() });
-      } catch (twilioErr) {
-        console.log({ route: "POST /register", phone: normalizedPhone, status: 400, message: "OTP check failed" });
+        await verifyOtp(normalizedPhone, regRow.rows[0].session_id, String(otp).trim());
+      } catch (tfErr) {
+        console.log({ route: "POST /register", phone: normalizedPhone, status: 400, message: `2Factor OTP check failed: ${tfErr.message}` });
         return res.status(400).json({ success: false, message: "Invalid or expired OTP" });
       }
-      if (check.status !== "approved") {
-        console.log({ route: "POST /register", phone: normalizedPhone, status: 400, message: `OTP status: ${check.status}` });
-        return res.status(400).json({ success: false, message: "Invalid or expired OTP" });
-      }
+      await db.query(
+        "DELETE FROM otp_verifications WHERE phone = $1 AND user_id IS NULL",
+        [normalizedPhone]
+      );
     } else {
       console.warn({ route: "POST /register", phone: normalizedPhone, message: "OTP verification SKIPPED (dev mode)" });
     }
