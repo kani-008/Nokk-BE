@@ -12,4 +12,17 @@ const loginLimiter = rateLimit({
   }
 });
 
-module.exports = { loginLimiter };
+// Throttles the public pincode/reverse-geocode lookups so a single client
+// can't burn through the (rate-limited, sometimes-paid) third-party quotas.
+const lookupLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 30,             // max 30 requests per IP per window
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (req, res) => {
+    console.log(`[ratelimit] blocked  ${req.method} ${req.originalUrl} | ip=${req.ip}`);
+    res.status(429).json({ success: false, message: "Too many requests. Please try again shortly." });
+  }
+});
+
+module.exports = { loginLimiter, lookupLimiter };

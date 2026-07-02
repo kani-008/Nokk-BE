@@ -25,13 +25,17 @@ const dashboardRoute = require("./src/routes/dashboardRoute.js");
 const reportRoute = require("./src/routes/reportRoute.js");
 const uploadRoute = require("./src/routes/uploadRoute.js");
 const notificationRoute = require("./src/routes/notificationRoute.js");
+const locationRoute = require("./src/routes/locationRoute.js");
 
 const app = express();
 const PORT = process.env.PORT || 5000;
-const HOST = "0.0.0.0"; // bind to all interfaces so LAN devices can reach it
+const HOST = "0.0.0.0"; // bind to all interfaces (required by every PaaS — Render, Railway, etc.)
+const IS_PROD = process.env.NODE_ENV === "production";
 
-// Trust the first proxy hop so rate-limiter sees real client IPs behind nginx/LB
-app.set("trust proxy", 1);
+// Trust the first proxy hop so req.ip / rate-limiter see the real client IP
+// behind the platform's load balancer (Render, Railway, nginx, etc.). If you
+// sit behind more than one proxy hop, bump this via TRUST_PROXY in env.
+app.set("trust proxy", Number(process.env.TRUST_PROXY) || 1);
 
 // ── Security headers (helmet) ─────────────────────────────────────
 app.use(
@@ -41,18 +45,32 @@ app.use(
 );
 
 // ── CORS ──────────────────────────────────────────────────────────
+// Strip trailing slashes so "https://foo.com/" and "https://foo.com" both match.
+const normalizeOrigin = (o) => o.trim().replace(/\/+$/, "");
+
 const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
-  ? process.env.ALLOWED_ORIGINS.split(",").map((o) => o.trim())
-  : ["http://localhost:5173", "http://localhost:4173"]; // vite dev + preview
+  ? process.env.ALLOWED_ORIGINS.split(",").map(normalizeOrigin).filter(Boolean)
+  : IS_PROD
+    ? [] // production must set ALLOWED_ORIGINS explicitly — fail closed, no silent localhost fallback
+    : ["http://localhost:5173", "http://localhost:4173"]; // vite dev + preview
+
+if (IS_PROD && ALLOWED_ORIGINS.length === 0) {
+  console.warn("[cors] NODE_ENV=production but ALLOWED_ORIGINS is not set — all browser origins will be blocked.");
+}
 
 app.use(
   cors({
     origin: (origin, cb) => {
-      // allow server-to-server / curl (no Origin header) and allowed list
-      if (!origin || ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
+      // allow server-to-server / curl / same-origin requests (no Origin header)
+      if (!origin) return cb(null, true);
+      if (ALLOWED_ORIGINS.includes(normalizeOrigin(origin))) return cb(null, true);
+      console.warn(`[cors] blocked origin '${origin}'`);
       cb(new Error(`CORS: origin '${origin}' not allowed`));
     },
     credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+    maxAge: 86400, // cache CORS preflight for a day — fewer OPTIONS round-trips in prod
   }),
 );
 
@@ -95,6 +113,7 @@ app.use("/api/dashboard", dashboardRoute); // KPIs, reports, charts (admin only)
 app.use("/api/reports", reportRoute); // exportable reports (admin only)
 app.use("/api/upload", uploadRoute); // file upload to Supabase Storage (admin only)
 app.use("/api/notifications", notificationRoute); // notifications (customer) | send/manage (admin)
+app.use("/api/location", locationRoute); // public — pincode lookup + reverse geocode
 
 // ── 404 ───────────────────────────────────────────────────────────
 app.use((req, res) => {
@@ -109,6 +128,7 @@ app.use((err, req, res, next) => {
 });
 
 // ── helper: find this machine's LAN IPv4 (e.g. 192.168.1.5) ────────
+// Dev-only convenience — meaningless (and mildly leaky) on a cloud host.
 function getLanIp() {
   const nets = os.networkInterfaces();
   for (const name of Object.keys(nets)) {
@@ -120,10 +140,31 @@ function getLanIp() {
 }
 
 // ── Start ─────────────────────────────────────────────────────────
-app.listen(PORT, HOST, () => {
-  const lanIp = getLanIp();
-  console.log("NammaOorKaruvattuKadai server started");
-  console.log(`Local:   http://localhost:${PORT}`);
-  console.log(`Network: http://${lanIp}:${PORT}   (same Wi-Fi)`);
+const server = app.listen(PORT, HOST, () => {
+  console.log(`NammaOorKaruvattuKadai server started (${IS_PROD ? "production" : "development"})`);
+  if (IS_PROD) {
+    console.log(`Listening on port ${PORT}`);
+  } else {
+    const lanIp = getLanIp();
+    console.log(`Local:   http://localhost:${PORT}`);
+    console.log(`Network: http://${lanIp}:${PORT}   (same Wi-Fi)`);
+  }
 });
+
+// ── Graceful shutdown ────────────────────────────────────────────
+// PaaS platforms (Render, Railway, etc.) send SIGTERM before killing the
+// container on redeploy/scale-down. Stop accepting new connections and let
+// in-flight requests finish instead of dropping them mid-response.
+function shutdown(signal) {
+  console.log(`${signal} received: closing server gracefully`);
+  server.close(() => {
+    console.log("Server closed, exiting");
+    process.exit(0);
+  });
+  // Force-exit if connections don't drain in time
+  setTimeout(() => process.exit(1), 10_000).unref();
+}
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
+
 module.exports = app;
