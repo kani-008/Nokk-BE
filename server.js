@@ -27,6 +27,7 @@ const reportRoute = require("./src/routes/reportRoute.js");
 const uploadRoute = require("./src/routes/uploadRoute.js");
 const notificationRoute = require("./src/routes/notificationRoute.js");
 const locationRoute = require("./src/routes/locationRoute.js");
+const sitemapRoute = require("./src/routes/sitemapRoute.js");
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -95,6 +96,9 @@ app.get("/", (req, res) => {
     timestamp: new Date(),
   });
 });
+
+// ── Sitemap — mounted at root before /api routes, no auth ─────────
+app.use("/sitemap.xml", sitemapRoute);
 
 // ── API routes ────────────────────────────────────────────────────
 app.use("/api/auth", loginRoute); // login, OTP, reset-password, refresh, logout
