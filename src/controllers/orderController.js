@@ -33,6 +33,7 @@ function formatOrder(ord, items = [], timeline = []) {
     address: {
       addressLine1: ord.shipping_address_line1,
       addressLine2: ord.shipping_address_line2,
+      taluk: ord.shipping_taluk,
       city: ord.shipping_city,
       state: ord.shipping_state,
       pincode: ord.shipping_pincode
@@ -54,22 +55,30 @@ function formatItem(i) {
     total: num(i.price) * parseInt(i.quantity),
     imageUrl: i.primary_image || null,
     slug: i.slug || null,
+    isReviewed: i.is_reviewed === true,
   };
 }
 
 // ------------------------------------------------------------------
-// Single order — used by detail endpoints and checkout response
+// Single order — used by detail endpoints and checkout response.
+//
+// reviewerUserId is OPTIONAL and must only be passed by customer-facing
+// "my orders" callers (e.g. getMyOrderById) — it left-joins product_reviews
+// scoped to that user so formatItem can flag isReviewed per item. Admin
+// order-detail callers must omit it so admin listings never get this join.
 // ------------------------------------------------------------------
-async function fetchItemsAndTimeline(orderId) {
+async function fetchItemsAndTimeline(orderId, reviewerUserId = null) {
   const [itemsRes, timelineRes] = await Promise.all([
     db.query(
       `SELECT oi.id, oi.product_id, oi.variant_id, oi.name_en, oi.name_ta, oi.weight, oi.price, oi.quantity,
-              pi.image_url AS primary_image, p.slug
+              pi.image_url AS primary_image, p.slug,
+              (pr.id IS NOT NULL) AS is_reviewed
        FROM order_items oi
        JOIN products p ON p.id = oi.product_id
        LEFT JOIN product_images pi ON pi.product_id = oi.product_id AND pi.is_primary = TRUE
+       LEFT JOIN product_reviews pr ON pr.product_id = oi.product_id AND pr.user_id = $2
        WHERE oi.order_id = $1`,
-      [orderId]
+      [orderId, reviewerUserId]
     ),
     db.query(
       `SELECT status, notes, created_at AS date
@@ -87,19 +96,25 @@ async function fetchItemsAndTimeline(orderId) {
 // Batch fetch — used by listing endpoints to eliminate N+1.
 // Fetches items + timelines for ALL orders in exactly 2 queries
 // regardless of how many orders are in the list.
+//
+// reviewerUserId is OPTIONAL and must only be passed by customer-facing
+// "my orders" callers (e.g. getMyOrders) — see fetchItemsAndTimeline above
+// for why admin listing callers must omit it.
 // ------------------------------------------------------------------
-async function fetchItemsAndTimelinesForOrders(orderIds) {
+async function fetchItemsAndTimelinesForOrders(orderIds, reviewerUserId = null) {
   if (!orderIds.length) return { itemsMap: {}, timelinesMap: {} };
 
   const [itemsRes, timelineRes] = await Promise.all([
     db.query(
       `SELECT oi.id, oi.order_id, oi.product_id, oi.variant_id, oi.name_en, oi.name_ta, oi.weight, oi.price, oi.quantity,
-              pi.image_url AS primary_image, p.slug
+              pi.image_url AS primary_image, p.slug,
+              (pr.id IS NOT NULL) AS is_reviewed
        FROM order_items oi
        JOIN products p ON p.id = oi.product_id
        LEFT JOIN product_images pi ON pi.product_id = oi.product_id AND pi.is_primary = TRUE
+       LEFT JOIN product_reviews pr ON pr.product_id = oi.product_id AND pr.user_id = $2
        WHERE oi.order_id = ANY($1)`,
-      [orderIds]
+      [orderIds, reviewerUserId]
     ),
     db.query(
       `SELECT order_id, status, notes, created_at AS date
@@ -311,17 +326,17 @@ async function _createOrderCore(client, {
        id, user_id, customer_name, customer_email, customer_phone,
        subtotal, delivery_charge, discount, coupon_applied, total,
        status, payment_method, payment_status,
-       shipping_address_line1, shipping_address_line2,
+       shipping_address_line1, shipping_address_line2, shipping_taluk,
        shipping_city, shipping_state, shipping_pincode,
        razorpay_order_id, razorpay_payment_id, razorpay_signature
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending',$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`,
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending',$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)`,
     [
       orderId, userId,
       address.fullName, userEmail || null, address.phone,
       serverSubtotal, serverDeliveryCharge, serverDiscount,
       couponApplied ? String(couponApplied).trim().toUpperCase() : null, serverTotal,
       paymentMethod, paymentStatus,
-      addrLine1, address.addressLine2 || null,
+      addrLine1, address.addressLine2 || null, address.taluk || null,
       address.city, address.state || "Tamil Nadu", address.pincode,
       razorpayOrderId, razorpayPaymentId, razorpaySignature,
     ]
@@ -544,7 +559,7 @@ async function getMyOrders(req, res) {
     );
 
     const orderIds = result.rows.map(o => o.id);
-    const { itemsMap, timelinesMap } = await fetchItemsAndTimelinesForOrders(orderIds);
+    const { itemsMap, timelinesMap } = await fetchItemsAndTimelinesForOrders(orderIds, req.user.id);
     const orders = result.rows.map(ord =>
       formatOrder(ord, itemsMap[ord.id] || [], timelinesMap[ord.id] || [])
     );
@@ -580,7 +595,7 @@ async function getMyOrderById(req, res) {
       console.log({ route: "GET /api/orders/get-my-order", userId: req.user.id, orderId: id, status: 404, message: "Order not found" });
       return res.status(404).json({ success: false, message: "Order not found" });
     }
-    const { items, timeline } = await fetchItemsAndTimeline(id);
+    const { items, timeline } = await fetchItemsAndTimeline(id, req.user.id);
     console.log({ route: "GET /api/orders/get-my-order", userId: req.user.id, orderId: id, status: 200 });
     return res.json({ success: true, order: formatOrder(result.rows[0], items, timeline) });
   } catch (err) {
@@ -964,12 +979,12 @@ async function adminUpdateReplacement(req, res) {
            id, user_id, customer_name, customer_email, customer_phone,
            subtotal, delivery_charge, discount, coupon_applied, total,
            status, payment_method, payment_status,
-           shipping_address_line1, shipping_address_line2,
+           shipping_address_line1, shipping_address_line2, shipping_taluk,
            shipping_city, shipping_state, shipping_pincode
-         ) VALUES ($1,$2,$3,$4,$5,0,0,0,NULL,0,'pending','replacement','paid',$6,$7,$8,$9,$10)`,
+         ) VALUES ($1,$2,$3,$4,$5,0,0,0,NULL,0,'pending','replacement','paid',$6,$7,$8,$9,$10,$11)`,
         [
           newOrderId, orig.user_id, orig.customer_name, orig.customer_email, orig.customer_phone,
-          orig.shipping_address_line1, orig.shipping_address_line2,
+          orig.shipping_address_line1, orig.shipping_address_line2, orig.shipping_taluk,
           orig.shipping_city, orig.shipping_state, orig.shipping_pincode
         ]
       );

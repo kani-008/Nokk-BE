@@ -6,6 +6,7 @@ const {
   addVariant, updateVariant, deleteVariant,
   addImage, addImages, deleteImage,
   addReview, deleteReview,
+  updateReview, deleteMyReview, getMyReviewForProduct,
 } = require("../controllers/productController.js");
 const { authenticate, isAdmin } = require("../middleware/auth.js");
 const { uploadProduct } = require("../controllers/uploadController.js");
@@ -20,7 +21,10 @@ router.get("/weight-labels", getWeightLabels);
 router.get("/similar",       getSimilarProducts);
 
 // Customer (login required)
-router.post("/add-review",  authenticate, addReview);
+router.post  ("/add-review",     authenticate, addReview);
+router.put   ("/update-review",  authenticate, updateReview);
+router.delete("/delete-my-review", authenticate, deleteMyReview);
+router.get   ("/get-my-review",  authenticate, getMyReviewForProduct);
 
 // Admin — product
 router.post  ("/create-product", authenticate, isAdmin, createProduct);

@@ -151,20 +151,6 @@ const server = app.listen(PORT, HOST, () => {
   }
 });
 
-// ── Graceful shutdown ────────────────────────────────────────────
-// PaaS platforms (Render, Railway, etc.) send SIGTERM before killing the
-// container on redeploy/scale-down. Stop accepting new connections and let
-// in-flight requests finish instead of dropping them mid-response.
-function shutdown(signal) {
-  console.log(`${signal} received: closing server gracefully`);
-  server.close(() => {
-    console.log("Server closed, exiting");
-    process.exit(0);
-  });
-  // Force-exit if connections don't drain in time
-  setTimeout(() => process.exit(1), 10_000).unref();
-}
-process.on("SIGTERM", () => shutdown("SIGTERM"));
-process.on("SIGINT", () => shutdown("SIGINT"));
 
 module.exports = app;
+
