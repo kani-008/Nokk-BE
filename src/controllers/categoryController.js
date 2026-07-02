@@ -238,4 +238,24 @@ async function deleteCategory(req, res) {
   }
 }
 
-module.exports = { getAllCategories, getCategoryBySlug, createCategory, updateCategory, deleteCategory };
+async function adminGetAllCategories(req, res) {
+  console.log({ route: "GET /api/categories/admin-all", userId: req.user?.id, status: "fetching all categories for admin" });
+  try {
+    const result = await db.query(
+      `SELECT * FROM categories ORDER BY sort_order ASC, name_en ASC`
+    );
+    return res.json({ success: true, categories: result.rows.map(formatCategory) });
+  } catch (err) {
+    console.error({ route: "GET /api/categories/admin-all", error: err.message });
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+}
+
+module.exports = {
+  getAllCategories,
+  getCategoryBySlug,
+  createCategory,
+  updateCategory,
+  deleteCategory,
+  adminGetAllCategories
+};

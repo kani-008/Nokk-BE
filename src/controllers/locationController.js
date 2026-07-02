@@ -34,13 +34,16 @@ async function lookupPincode(req, res) {
   const url = `https://api.data.gov.in/resource/${resourceId}?api-key=${apiKey}&format=json&filters[pincode]=${pincode}`;
 
   try {
+    console.log(`[locationController] Requesting India Gov API: ${url.replace(apiKey, "HIDDEN_KEY")}`);
     const response = await fetchWithTimeout(url, 6000);
+    console.log(`[locationController] India Gov API Response Status: ${response.status} ${response.statusText}`);
     if (!response.ok) {
-      console.error({ route: "GET /api/location/pincode", pincode, status: 502, message: "Gov API request failed" });
+      console.error({ route: "GET /api/location/pincode", pincode, status: response.status, message: "Gov API request failed" });
       return res.status(502).json({ success: false, message: "Failed to fetch pincode details" });
     }
     const result = await response.json();
     const records = result.records || [];
+    console.log(`[locationController] India Gov API Records Found: ${records.length}`);
     if (records.length === 0) {
       console.log({ route: "GET /api/location/pincode", pincode, status: 404, message: "Pincode not found" });
       return res.status(404).json({ success: false, message: "Pincode not found" });
@@ -89,13 +92,16 @@ async function reverseGeocode(req, res) {
   const url = `https://api.geoapify.com/v1/geocode/reverse?lat=${latitude}&lon=${longitude}&apiKey=${apiKey}`;
 
   try {
+    console.log(`[locationController] Requesting Geoapify API: ${url.replace(apiKey, "HIDDEN_KEY")}`);
     const response = await fetchWithTimeout(url, 7000);
+    console.log(`[locationController] Geoapify API Response Status: ${response.status} ${response.statusText}`);
     if (!response.ok) {
-      console.error({ route: "GET /api/location/reverse-geocode", lat, lng, status: 502, message: "Geoapify request failed" });
+      console.error({ route: "GET /api/location/reverse-geocode", lat, lng, status: response.status, message: "Geoapify request failed" });
       return res.status(502).json({ success: false, message: "Failed to detect location details" });
     }
     const geoData = await response.json();
     const features = geoData.features || [];
+    console.log(`[locationController] Geoapify Features Found: ${features.length}`);
     if (features.length === 0) {
       console.log({ route: "GET /api/location/reverse-geocode", lat, lng, status: 404, message: "Location details not found" });
       return res.status(404).json({ success: false, message: "Location details not found" });
@@ -115,10 +121,13 @@ async function reverseGeocode(req, res) {
         const govApiKey = process.env.GOV_API_KEY;
         const resourceId = process.env.GOV_PINCODE_RESOURCE_ID;
         const govUrl = `https://api.data.gov.in/resource/${resourceId}?api-key=${govApiKey}&format=json&filters[pincode]=${data.pincode}`;
+        console.log(`[locationController] Requesting Gov API for enrichment: ${govUrl.replace(govApiKey, "HIDDEN_KEY")}`);
         const govResponse = await fetchWithTimeout(govUrl, 6000);
+        console.log(`[locationController] Gov API Enrichment Response Status: ${govResponse.status}`);
         if (govResponse.ok) {
           const govResult = await govResponse.json();
           const records = govResult.records || [];
+          console.log(`[locationController] Gov API Enrichment Records Found: ${records.length}`);
           let bestRecord = records.find((r) => r.deliverystatus === "Delivery" && r.taluk && r.taluk !== "NA");
           if (!bestRecord) bestRecord = records.find((r) => r.taluk && r.taluk !== "NA");
           if (!bestRecord) bestRecord = records.find((r) => r.deliverystatus === "Delivery");
@@ -129,7 +138,8 @@ async function reverseGeocode(req, res) {
             data.state = formatState(bestRecord.statename) || data.state;
           }
         }
-      } catch {
+      } catch (govErr) {
+        console.error(`[locationController] Gov API Enrichment error:`, govErr.message);
         // fall back to raw Geoapify values silently
       }
     }

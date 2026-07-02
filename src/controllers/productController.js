@@ -149,8 +149,12 @@ async function getAllProducts(req, res) {
   const sortMap = {
     "popular":        "v.avg_rating DESC, v.review_count DESC",
     "newest":         "v.created_at DESC",
-    "price-low-high": "v.min_price ASC",
-    "price-high-low": "v.min_price DESC"
+    "price-low-high": weightLabels && weightLabels.length > 0
+      ? "(SELECT MIN(pv.price) FROM product_variants pv WHERE pv.product_id = v.id AND pv.is_active = TRUE AND pv.weight_label = ANY($10)) ASC"
+      : "v.min_price ASC",
+    "price-high-low": weightLabels && weightLabels.length > 0
+      ? "(SELECT MIN(pv.price) FROM product_variants pv WHERE pv.product_id = v.id AND pv.is_active = TRUE AND pv.weight_label = ANY($10)) DESC"
+      : "v.min_price DESC"
   };
   const orderBy = sortMap[req.query.sort] || "v.avg_rating DESC, v.review_count DESC";
 

@@ -358,8 +358,87 @@ async function getMyReviewForProduct(req, res) {
   }
 }
 
+// ==================================================================
+// ADMIN — GET /api/products/admin-reviews   (isAdmin required)
+// ==================================================================
+async function adminGetAllReviews(req, res) {
+  console.log({ route: "GET /api/products/admin-reviews", userId: req.user.id, status: "fetching all reviews for admin" });
+  try {
+    const result = await db.query(
+      `SELECT pr.*, u.full_name AS user_name, u.phone AS user_phone, p.name_en AS product_name
+       FROM product_reviews pr
+       LEFT JOIN users u ON u.id = pr.user_id
+       LEFT JOIN products p ON p.id = pr.product_id
+       ORDER BY pr.created_at DESC`
+    );
+
+    const reviewIds = result.rows.map(r => r.id);
+    let reviewImagesMap = {};
+    if (reviewIds.length > 0) {
+      const revImgRes = await db.query(
+        `SELECT * FROM product_review_images WHERE review_id = ANY($1) ORDER BY sort_order ASC`,
+        [reviewIds]
+      );
+      revImgRes.rows.forEach(img => {
+        if (!reviewImagesMap[img.review_id]) reviewImagesMap[img.review_id] = [];
+        reviewImagesMap[img.review_id].push({ id: img.id, imageUrl: img.image_url });
+      });
+    }
+
+    const reviews = result.rows.map(r => ({
+      id: r.id,
+      productId: r.product_id,
+      productName: r.product_name || "Deleted Product",
+      userId: r.user_id,
+      userName: r.user_name || "Guest",
+      userPhone: r.user_phone || null,
+      rating: r.rating,
+      title: r.title,
+      comment: r.comment,
+      isApproved: r.is_approved,
+      isVerified: r.is_verified,
+      createdAt: r.created_at,
+      images: reviewImagesMap[r.id] || []
+    }));
+
+    return res.json({ success: true, reviews });
+  } catch (err) {
+    console.error({ route: "GET /api/products/admin-reviews", error: err.message });
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+}
+
+// ==================================================================
+// ADMIN — PUT /api/products/admin-approve-review   (isAdmin required)
+// Body: { reviewId, isApproved }
+// ==================================================================
+async function adminApproveReview(req, res) {
+  const { reviewId, isApproved } = req.body;
+  console.log({ route: "PUT /api/products/admin-approve-review", reviewId, isApproved });
+  if (!reviewId) {
+    return res.status(400).json({ success: false, message: "reviewId is required" });
+  }
+  try {
+    const result = await db.query(
+      `UPDATE product_reviews
+       SET is_approved = $1
+       WHERE id = $2
+       RETURNING id`,
+      [isApproved === true, reviewId]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, message: "Review not found" });
+    }
+    return res.json({ success: true, message: `Review approval status updated to ${isApproved}` });
+  } catch (err) {
+    console.error({ route: "PUT /api/products/admin-approve-review", error: err.message });
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+}
+
 module.exports = {
   formatReview, fetchReviewsForProduct,
   addReview, deleteReview,
-  updateReview, deleteMyReview, getMyReviewForProduct
+  updateReview, deleteMyReview, getMyReviewForProduct,
+  adminGetAllReviews, adminApproveReview
 };

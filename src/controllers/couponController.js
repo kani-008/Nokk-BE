@@ -33,10 +33,11 @@ function formatCoupon(c) {
 async function validateCoupon(req, res) {
   const code = req.body.code ? String(req.body.code).trim().toUpperCase() : "";
   const subtotal = parseFloat(req.body.subtotal) || 0;
-  console.log({ route: "POST /api/coupons/validate", body: { code, subtotal }, status: "validating coupon" });
+  const userId = req.user?.id || "unknown";
+  console.log(`[coupon/validate] REQUEST  | user: ${userId} | code: "${code}" | subtotal: ₹${subtotal}`);
 
   if (!code) {
-    console.log({ route: "POST /api/coupons/validate", status: 400, message: "Coupon code is required" });
+    console.log(`[coupon/validate] STATUS 400 | user: ${userId} | reason: empty code`);
     return res.status(400).json({ success: false, message: "Coupon code is required" });
   }
 
@@ -44,43 +45,45 @@ async function validateCoupon(req, res) {
     const result = await db.query(
       `SELECT * FROM coupons WHERE code = $1 AND is_active = TRUE`, [code]
     );
+    console.log(`[coupon/validate] DB query | code: "${code}" | rows found: ${result.rows.length}`);
 
     if (result.rows.length === 0) {
-      console.log({ route: "POST /api/coupons/validate", code, status: 404, message: "Invalid coupon code" });
+      console.log(`[coupon/validate] STATUS 404 | code: "${code}" | reason: not found or inactive`);
       return res.status(404).json({ success: false, message: "Invalid coupon code" });
     }
 
     const c = result.rows[0];
+    console.log(`[coupon/validate] Coupon found | id: ${c.id} | discount_percent: ${c.discount_percent} | discount_flat: ${c.discount_flat} | min_order: ${c.min_order} | expiry: ${c.expiry_date} | usage: ${c.usage_count}/${c.max_uses ?? "∞"}`);
 
     // Expiry check
     if (c.expiry_date && new Date(c.expiry_date) < new Date()) {
-      console.log({ route: "POST /api/coupons/validate", code, status: 400, message: "Coupon expired" });
+      console.log(`[coupon/validate] STATUS 400 | code: "${code}" | reason: expired on ${c.expiry_date}`);
       return res.status(400).json({ success: false, message: "This coupon has expired" });
     }
 
     // Usage limit check
     if (c.max_uses !== null && parseInt(c.usage_count) >= c.max_uses) {
-      console.log({ route: "POST /api/coupons/validate", code, status: 400, message: "Coupon usage limit reached" });
+      console.log(`[coupon/validate] STATUS 400 | code: "${code}" | reason: usage limit reached (${c.usage_count}/${c.max_uses})`);
       return res.status(400).json({ success: false, message: "This coupon has reached its usage limit" });
     }
 
     // Per-user usage limit check
     if (c.max_uses_per_user !== null) {
-      const userId = req.user.id;
       const userUsageRes = await db.query(
         "SELECT COUNT(*) AS count FROM coupon_usages WHERE coupon_id = $1 AND user_id = $2",
         [c.id, userId]
       );
       const userUsageCount = parseInt(userUsageRes.rows[0].count) || 0;
+      console.log(`[coupon/validate] Per-user usage | user: ${userId} | used: ${userUsageCount}/${c.max_uses_per_user}`);
       if (userUsageCount >= c.max_uses_per_user) {
-        console.log({ route: "POST /api/coupons/validate", code, userId, status: 400, message: "Per-user usage limit reached" });
+        console.log(`[coupon/validate] STATUS 400 | code: "${code}" | user: ${userId} | reason: per-user limit reached`);
         return res.status(400).json({ success: false, message: "You have reached your personal usage limit for this coupon" });
       }
     }
 
     // Minimum order check
     if (subtotal < parseFloat(c.min_order)) {
-      console.log({ route: "POST /api/coupons/validate", code, status: 400, message: "min order not met" });
+      console.log(`[coupon/validate] STATUS 400 | code: "${code}" | reason: subtotal ₹${subtotal} < min_order ₹${c.min_order}`);
       return res.status(400).json({
         success: false,
         message: `Minimum order of ₹${c.min_order} required for this coupon`
@@ -94,9 +97,9 @@ async function validateCoupon(req, res) {
     } else if (parseFloat(c.discount_flat) > 0) {
       discountAmount = parseFloat(c.discount_flat);
     }
-    discountAmount = Math.min(discountAmount, subtotal); // never exceed subtotal
+    discountAmount = Math.min(discountAmount, subtotal);
 
-    console.log({ route: "POST /api/coupons/validate", code, status: 200, discountAmount });
+    console.log(`[coupon/validate] STATUS 200 | code: "${code}" | user: ${userId} | discountAmount: ₹${discountAmount.toFixed(2)} | freeShipping: ${c.free_shipping}`);
     return res.json({
       success: true,
       message: "Coupon applied successfully",
@@ -105,7 +108,7 @@ async function validateCoupon(req, res) {
       freeShipping: c.free_shipping
     });
   } catch (err) {
-    console.error({ route: "POST /api/coupons/validate", code, status: 500, error: err.message });
+    console.error(`[coupon/validate] STATUS 500 | code: "${code}" | error: ${err.message}`, err);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -115,15 +118,14 @@ async function validateCoupon(req, res) {
 // All coupons with active/expired/exhausted flags.
 // ==================================================================
 async function getAllCoupons(req, res) {
-  console.log({ route: "GET /api/coupons", status: "fetching all coupons" });
+  const adminId = req.user?.id || "unknown";
+  console.log(`[coupon/get-all] REQUEST | admin: ${adminId}`);
   try {
-    const result = await db.query(
-      `SELECT * FROM coupons ORDER BY created_at DESC`
-    );
-    console.log({ route: "GET /api/coupons", status: 200, count: result.rows.length });
+    const result = await db.query(`SELECT * FROM coupons ORDER BY created_at DESC`);
+    console.log(`[coupon/get-all] STATUS 200 | count: ${result.rows.length} | codes: [${result.rows.map(r => r.code).join(", ")}]`);
     return res.json({ success: true, coupons: result.rows.map(formatCoupon) });
   } catch (err) {
-    console.error({ route: "GET /api/coupons", status: 500, error: err.message });
+    console.error(`[coupon/get-all] STATUS 500 | error: ${err.message}`, err);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -138,14 +140,16 @@ async function createCoupon(req, res) {
     code, discountPercent, discountFlat, freeShipping,
     minOrder, maxUses, maxUsesPerUser, expiryDate, description, isActive
   } = req.body;
-  console.log({ route: "POST /api/coupons", body: { code, discountPercent, discountFlat, freeShipping, minOrder, maxUses, maxUsesPerUser, expiryDate, isActive }, status: "creating coupon" });
+  const adminId = req.user?.id || "unknown";
+  console.log(`[coupon/create] REQUEST | admin: ${adminId} | body:`, { code, discountPercent, discountFlat, freeShipping, minOrder, maxUses, maxUsesPerUser, expiryDate, isActive });
 
   if (!code) {
-    console.log({ route: "POST /api/coupons", status: 400, message: "code is required" });
+    console.log(`[coupon/create] STATUS 400 | reason: code is required`);
     return res.status(400).json({ success: false, message: "code is required" });
   }
 
   if (discountPercent > 0 && discountFlat > 0) {
+    console.log(`[coupon/create] STATUS 400 | reason: both percent and flat specified`);
     return res.status(400).json({ success: false, message: "Cannot specify both percentage and flat discount values" });
   }
 
@@ -154,7 +158,7 @@ async function createCoupon(req, res) {
   try {
     const dup = await db.query("SELECT id FROM coupons WHERE code = $1", [upperCode]);
     if (dup.rows.length > 0) {
-      console.log({ route: "POST /api/coupons", code: upperCode, status: 409, message: "coupon code already exists" });
+      console.log(`[coupon/create] STATUS 409 | code: "${upperCode}" | reason: duplicate code`);
       return res.status(409).json({ success: false, message: "Coupon code already exists" });
     }
 
@@ -177,10 +181,11 @@ async function createCoupon(req, res) {
         isActive ?? true
       ]
     );
-    console.log({ route: "POST /api/coupons", code: upperCode, status: 201, couponId: result.rows[0].id });
-    return res.status(201).json({ success: true, message: "Coupon created", coupon: formatCoupon(result.rows[0]) });
+    const created = result.rows[0];
+    console.log(`[coupon/create] STATUS 201 | code: "${upperCode}" | id: ${created.id} | discount_percent: ${created.discount_percent} | discount_flat: ${created.discount_flat}`);
+    return res.status(201).json({ success: true, message: "Coupon created", coupon: formatCoupon(created) });
   } catch (err) {
-    console.error({ route: "POST /api/coupons", status: 500, error: err.message });
+    console.error(`[coupon/create] STATUS 500 | code: "${upperCode}" | error: ${err.message}`, err);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -193,7 +198,8 @@ async function updateCoupon(req, res) {
     id, code, discountPercent, discountFlat, freeShipping,
     minOrder, maxUses, maxUsesPerUser, expiryDate, description, isActive
   } = req.body;
-  console.log({ route: "PUT /api/coupons/update-coupon", couponId: id, body: { code, discountPercent, discountFlat, freeShipping, minOrder, maxUses, maxUsesPerUser, expiryDate, isActive }, status: "updating coupon" });
+  const adminId = req.user?.id || "unknown";
+  console.log(`[coupon/update] REQUEST | admin: ${adminId} | couponId: ${id} | body:`, { code, discountPercent, discountFlat, freeShipping, minOrder, maxUses, maxUsesPerUser, expiryDate, isActive });
 
   if (!id) {
     return res.status(400).json({ success: false, message: "Coupon ID is required" });
@@ -202,7 +208,7 @@ async function updateCoupon(req, res) {
   try {
     const existingRes = await db.query("SELECT * FROM coupons WHERE id = $1", [id]);
     if (existingRes.rows.length === 0) {
-      console.log({ route: "PUT /api/coupons/update-coupon", couponId: id, status: 404, message: "Coupon not found" });
+      console.log(`[coupon/update] STATUS 404 | couponId: ${id} | reason: not found`);
       return res.status(404).json({ success: false, message: "Coupon not found" });
     }
     const existing = existingRes.rows[0];
@@ -266,10 +272,11 @@ async function updateCoupon(req, res) {
       ]
     );
 
-    console.log({ route: "PUT /api/coupons/update-coupon", couponId: id, status: 200 });
-    return res.json({ success: true, message: "Coupon updated", coupon: formatCoupon(result.rows[0]) });
+    const updated = result.rows[0];
+    console.log(`[coupon/update] STATUS 200 | couponId: ${id} | code: "${updated.code}" | discount_percent: ${updated.discount_percent} | discount_flat: ${updated.discount_flat} | is_active: ${updated.is_active}`);
+    return res.json({ success: true, message: "Coupon updated", coupon: formatCoupon(updated) });
   } catch (err) {
-    console.error({ route: "PUT /api/coupons/update-coupon", couponId: id, status: 500, error: err.message });
+    console.error(`[coupon/update] STATUS 500 | couponId: ${id} | error: ${err.message}`, err);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -279,22 +286,22 @@ async function updateCoupon(req, res) {
 // ==================================================================
 async function deleteCoupon(req, res) {
   const { id } = req.body;
-  console.log({ route: "DELETE /api/coupons/delete-coupon", couponId: id, status: "deleting coupon" });
+  const adminId = req.user?.id || "unknown";
+  console.log(`[coupon/delete] REQUEST | admin: ${adminId} | couponId: ${id}`);
   if (!id) {
+    console.log(`[coupon/delete] STATUS 400 | reason: id missing`);
     return res.status(400).json({ success: false, message: "Coupon ID is required" });
   }
   try {
-    const result = await db.query(
-      "DELETE FROM coupons WHERE id = $1 RETURNING id", [id]
-    );
+    const result = await db.query("DELETE FROM coupons WHERE id = $1 RETURNING id, code", [id]);
     if (result.rows.length === 0) {
-      console.log({ route: "DELETE /api/coupons/delete-coupon", couponId: id, status: 404, message: "Coupon not found" });
+      console.log(`[coupon/delete] STATUS 404 | couponId: ${id} | reason: not found`);
       return res.status(404).json({ success: false, message: "Coupon not found" });
     }
-    console.log({ route: "DELETE /api/coupons/delete-coupon", couponId: id, status: 200 });
+    console.log(`[coupon/delete] STATUS 200 | couponId: ${id} | code: "${result.rows[0].code}" | deleted successfully`);
     return res.json({ success: true, message: "Coupon deleted" });
   } catch (err) {
-    console.error({ route: "DELETE /api/coupons/delete-coupon", couponId: id, status: 500, error: err.message });
+    console.error(`[coupon/delete] STATUS 500 | couponId: ${id} | error: ${err.message}`, err);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -304,7 +311,7 @@ async function deleteCoupon(req, res) {
 // Returns active, non-expired coupons (no auth required).
 // ==================================================================
 async function getPublicCoupons(req, res) {
-  console.log({ route: "GET /api/coupons/get-public", status: "fetching public coupons" });
+  console.log(`[coupon/get-public] REQUEST — fetching public coupons`);
   try {
     const result = await db.query(
       `SELECT * FROM coupons
@@ -313,10 +320,10 @@ async function getPublicCoupons(req, res) {
          AND (max_uses IS NULL OR usage_count < max_uses)
        ORDER BY created_at DESC`
     );
-    console.log({ route: "GET /api/coupons/get-public", status: 200, count: result.rows.length });
+    console.log(`[coupon/get-public] STATUS 200 | count: ${result.rows.length} | codes: [${result.rows.map(r => r.code).join(", ")}]`);
     return res.json({ success: true, coupons: result.rows.map(formatCoupon) });
   } catch (err) {
-    console.error({ route: "GET /api/coupons/get-public", status: 500, error: err.message });
+    console.error(`[coupon/get-public] STATUS 500 | error: ${err.message}`, err);
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }

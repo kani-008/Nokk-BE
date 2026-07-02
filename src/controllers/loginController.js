@@ -2,7 +2,16 @@ const bcrypt = require("bcryptjs");
 const { createNotification } = require("./notificationController.js");
 const jwt = require("jsonwebtoken");
 const db = require("../config/db.js");
-const { sendOtp, verifyOtp } = require("../config/twofactor.js");
+// Mock OTP functions — SMS OTP (2Factor/Twilio) has been removed.
+// WhatsApp OTP integration will be implemented in the future.
+async function sendOtp(phone, templateName) {
+  console.log(`[Mock OTP] sendOtp to ${phone} using template ${templateName}`);
+  return "mock-session-id";
+}
+async function verifyOtp(phone, sessionId, otp) {
+  console.log(`[Mock OTP] verifyOtp for ${phone} with sessionId ${sessionId} and otp ${otp}`);
+  return true;
+}
 
 // ------------------------------------------------------------------
 // Config (read from .env)
@@ -603,6 +612,7 @@ async function setpassword(req, res) {
     const user = userRes.rows[0];
 
     // There must be a verified, still-valid OTP (from /otp-verify).
+    /* --- Temporarily disabled for both dev and production until WhatsApp OTP is ready ---
     const otpRes = await db.query(
       `SELECT id FROM otp_verifications
        WHERE user_id = $1 AND phone = $2 AND verified = TRUE AND expires_at > NOW()
@@ -620,6 +630,7 @@ async function setpassword(req, res) {
         .status(400)
         .json({ success: false, message: "Please verify the OTP first" });
     }
+    ------------------------------------------------------------------------------------- */
 
     const passwordHash = await bcrypt.hash(newPassword, 10);
     await db.query(
@@ -628,9 +639,11 @@ async function setpassword(req, res) {
     );
 
     // Consume the OTP so it can't be reused.
+    /* --- Temporarily commented out until WhatsApp OTP is ready ---
     await db.query("DELETE FROM otp_verifications WHERE id = $1", [
       otpRes.rows[0].id,
     ]);
+    ----------------------------------------------------------------- */
     // Log out all existing sessions after a password change (best practice).
     await db.query("DELETE FROM refresh_tokens WHERE user_id = $1", [user.id]);
 
@@ -750,6 +763,7 @@ async function register(req, res) {
         });
     }
 
+    /* --- Temporarily disabled for both dev and production until WhatsApp OTP is ready ---
     if (process.env.NODE_ENV === "production") {
       if (!otp) {
         console.log({ route: "POST /register", phone: normalizedPhone, status: 400, message: "otp is required" });
@@ -778,6 +792,8 @@ async function register(req, res) {
     } else {
       console.warn({ route: "POST /register", phone: normalizedPhone, message: "OTP verification SKIPPED (dev mode)" });
     }
+    ------------------------------------------------------------------------------------- */
+    console.warn({ route: "POST /register", phone: normalizedPhone, message: "OTP verification SKIPPED (temporary bypass)" });
 
     const passwordHash = await bcrypt.hash(password, 10);
     const result = await db.query(
