@@ -1,5 +1,6 @@
 const db = require("../config/db.js");
 const { uploadToSupabase, deleteFromSupabase } = require("../config/supabase.js");
+const { fetchReviewsForProduct } = require("./reviewController.js");
 
 // ------------------------------------------------------------------
 // Helpers
@@ -74,24 +75,9 @@ function formatImage(i) {
   };
 }
 
-function formatReview(r) {
-  return {
-    id: r.id,
-    productId: r.product_id,
-    userId: r.user_id,
-    userName: r.full_name || null,
-    rating: r.rating,
-    title: r.title,
-    comment: r.comment,
-    isApproved: r.is_approved,
-    isVerified: r.is_verified,
-    createdAt: r.created_at
-  };
-}
-
 async function fetchVariantsImagesReviews(productId) {
   try {
-    const [varRes, imgRes, revRes] = await Promise.all([
+    const [varRes, imgRes, reviews] = await Promise.all([
       db.query(
         `SELECT * FROM product_variants WHERE product_id = $1 ORDER BY weight_grams ASC`,
         [productId]
@@ -108,23 +94,17 @@ async function fetchVariantsImagesReviews(productId) {
         dbErr.status = 500;
         throw dbErr;
       }),
-      db.query(
-        `SELECT pr.*, u.full_name
-         FROM product_reviews pr
-         LEFT JOIN users u ON u.id = pr.user_id
-         WHERE pr.product_id = $1 AND pr.is_approved = TRUE
-         ORDER BY pr.created_at DESC`,
-        [productId]
-      ).catch(err => {
+      fetchReviewsForProduct(productId).catch(err => {
         const dbErr = new Error(`Database error fetching reviews for product ${productId}: ${err.message}`);
         dbErr.status = 500;
         throw dbErr;
       })
     ]);
+
     return {
       variants: varRes.rows.map(formatVariant),
       images: imgRes.rows.map(formatImage),
-      reviews: revRes.rows.map(formatReview)
+      reviews
     };
   } catch (err) {
     console.error(`[fetchVariantsImagesReviews] error: ${err.message}`);
@@ -983,209 +963,6 @@ async function deleteImage(req, res) {
 }
 
 // ==================================================================
-// CUSTOMER — POST /api/products/:id/reviews   (login required)
-// Submit a review. One review per product per user.
-// ==================================================================
-async function addReview(req, res) {
-  const { productId: id, rating, title, comment, orderId } = req.body;
-  console.log({ route: "POST /api/products/add-review", productId: id, userId: req.user.id, body: { rating, title, orderId }, status: "submitting review" });
-
-  if (!rating || rating < 1 || rating > 5) {
-    console.log({ route: "POST /api/products/add-review", productId: id, userId: req.user.id, status: 400, message: "invalid rating" });
-    return res.status(400).json({ success: false, message: "rating must be between 1 and 5" });
-  }
-  try {
-    // Duplicate check
-    const dup = await db.query(
-      "SELECT id FROM product_reviews WHERE product_id = $1 AND user_id = $2",
-      [id, req.user.id]
-    );
-    if (dup.rows.length > 0) {
-      console.log({ route: "POST /api/products/add-review", productId: id, userId: req.user.id, status: 409, message: "already reviewed" });
-      return res.status(409).json({ success: false, message: "You have already reviewed this product" });
-    }
-
-    // Optional order linkage — if provided, validate it actually justifies this review
-    let validatedOrderId = null;
-    if (orderId) {
-      const orderRes = await db.query(
-        "SELECT id, status FROM orders WHERE id = $1 AND user_id = $2",
-        [orderId, req.user.id]
-      );
-      if (orderRes.rows.length === 0) {
-        console.log({ route: "POST /api/products/add-review", productId: id, userId: req.user.id, orderId, status: 400, message: "order not found for user" });
-        return res.status(400).json({ success: false, message: "Order not found" });
-      }
-      if (orderRes.rows[0].status !== "delivered") {
-        console.log({ route: "POST /api/products/add-review", productId: id, userId: req.user.id, orderId, status: 400, message: "order not delivered" });
-        return res.status(400).json({ success: false, message: "You can only review products from delivered orders" });
-      }
-      const itemRes = await db.query(
-        "SELECT id FROM order_items WHERE order_id = $1 AND product_id = $2",
-        [orderId, id]
-      );
-      if (itemRes.rows.length === 0) {
-        console.log({ route: "POST /api/products/add-review", productId: id, userId: req.user.id, orderId, status: 400, message: "product not in order" });
-        return res.status(400).json({ success: false, message: "This product was not part of the given order" });
-      }
-      validatedOrderId = orderId;
-    }
-
-    // Check if verified purchase
-    const purchase = await db.query(
-      `SELECT oi.id FROM order_items oi
-       JOIN orders o ON o.id = oi.order_id
-       WHERE oi.product_id = $1 AND o.user_id = $2 AND o.status = 'delivered'
-       LIMIT 1`,
-      [id, req.user.id]
-    );
-    const isVerified = purchase.rows.length > 0;
-
-    const result = await db.query(
-      `INSERT INTO product_reviews
-         (product_id, user_id, rating, title, comment, is_approved, is_verified, order_id)
-       VALUES ($1,$2,$3,$4,$5,TRUE,$6,$7)
-       RETURNING *`,
-      [id, req.user.id, rating, title || null, comment || null, isVerified, validatedOrderId]
-    );
-    console.log({ route: "POST /api/products/add-review", productId: id, userId: req.user.id, status: 201, reviewId: result.rows[0].id });
-    return res.status(201).json({ success: true, message: "Review submitted", review: formatReview(result.rows[0]) });
-  } catch (err) {
-    console.error({ route: "POST /api/products/add-review", productId: id, userId: req.user.id, status: 500, error: err.message });
-    return res.status(500).json({ success: false, message: "Internal server error" });
-  }
-}
-
-// ==================================================================
-// ADMIN — DELETE /api/products/:id/reviews/:reviewId
-// ==================================================================
-async function deleteReview(req, res) {
-  const { productId: id, reviewId } = req.body;
-  console.log({ route: "DELETE /api/products/delete-review", productId: id, reviewId, status: "deleting review" });
-  try {
-    const result = await db.query(
-      "DELETE FROM product_reviews WHERE id = $1 AND product_id = $2 RETURNING id",
-      [reviewId, id]
-    );
-    if (result.rows.length === 0) {
-      console.log({ route: "DELETE /api/products/delete-review", productId: id, reviewId, status: 404, message: "Review not found" });
-      return res.status(404).json({ success: false, message: "Review not found" });
-    }
-    console.log({ route: "DELETE /api/products/delete-review", productId: id, reviewId, status: 200 });
-    return res.json({ success: true, message: "Review deleted" });
-  } catch (err) {
-    console.error({ route: "DELETE /api/products/delete-review", productId: id, reviewId, status: 500, error: err.message });
-    return res.status(500).json({ success: false, message: "Internal server error" });
-  }
-}
-
-// ==================================================================
-// CUSTOMER — PUT /api/products/update-review   (login required)
-// Body: { reviewId, rating, title, comment }
-// Edits the logged-in user's own review. Rating/title/comment only.
-// ==================================================================
-async function updateReview(req, res) {
-  const { reviewId, rating, title, comment } = req.body;
-  console.log({ route: "PUT /api/products/update-review", reviewId, userId: req.user.id, body: { rating, title }, status: "updating own review" });
-
-  if (!reviewId) {
-    console.log({ route: "PUT /api/products/update-review", reviewId, userId: req.user.id, status: 400, message: "reviewId is required" });
-    return res.status(400).json({ success: false, message: "reviewId is required" });
-  }
-  if (!rating || rating < 1 || rating > 5) {
-    console.log({ route: "PUT /api/products/update-review", reviewId, userId: req.user.id, status: 400, message: "invalid rating" });
-    return res.status(400).json({ success: false, message: "rating must be between 1 and 5" });
-  }
-
-  try {
-    const owned = await db.query(
-      "SELECT id FROM product_reviews WHERE id = $1 AND user_id = $2",
-      [reviewId, req.user.id]
-    );
-    if (owned.rows.length === 0) {
-      console.log({ route: "PUT /api/products/update-review", reviewId, userId: req.user.id, status: 404, message: "review not found" });
-      return res.status(404).json({ success: false, message: "Review not found" });
-    }
-
-    const result = await db.query(
-      `UPDATE product_reviews
-       SET rating = $1, title = $2, comment = $3, updated_at = NOW()
-       WHERE id = $4 AND user_id = $5
-       RETURNING *`,
-      [rating, title || null, comment || null, reviewId, req.user.id]
-    );
-    console.log({ route: "PUT /api/products/update-review", reviewId, userId: req.user.id, status: 200 });
-    return res.json({ success: true, message: "Review updated", review: formatReview(result.rows[0]) });
-  } catch (err) {
-    console.error({ route: "PUT /api/products/update-review", reviewId, userId: req.user.id, status: 500, error: err.message });
-    return res.status(500).json({ success: false, message: "Internal server error" });
-  }
-}
-
-// ==================================================================
-// CUSTOMER — DELETE /api/products/delete-my-review   (login required)
-// Body: { reviewId }
-// Deletes the logged-in user's own review only. Distinct from the
-// admin-only deleteReview, which can remove any review for moderation.
-// ==================================================================
-async function deleteMyReview(req, res) {
-  const { reviewId } = req.body;
-  console.log({ route: "DELETE /api/products/delete-my-review", reviewId, userId: req.user.id, status: "deleting own review" });
-
-  if (!reviewId) {
-    console.log({ route: "DELETE /api/products/delete-my-review", reviewId, userId: req.user.id, status: 400, message: "reviewId is required" });
-    return res.status(400).json({ success: false, message: "reviewId is required" });
-  }
-
-  try {
-    const result = await db.query(
-      "DELETE FROM product_reviews WHERE id = $1 AND user_id = $2 RETURNING id",
-      [reviewId, req.user.id]
-    );
-    if (result.rows.length === 0) {
-      console.log({ route: "DELETE /api/products/delete-my-review", reviewId, userId: req.user.id, status: 404, message: "review not found" });
-      return res.status(404).json({ success: false, message: "Review not found" });
-    }
-    console.log({ route: "DELETE /api/products/delete-my-review", reviewId, userId: req.user.id, status: 200 });
-    return res.json({ success: true, message: "Review deleted" });
-  } catch (err) {
-    console.error({ route: "DELETE /api/products/delete-my-review", reviewId, userId: req.user.id, status: 500, error: err.message });
-    return res.status(500).json({ success: false, message: "Internal server error" });
-  }
-}
-
-// ==================================================================
-// CUSTOMER — GET /api/products/get-my-review?productId=   (login required)
-// Returns the logged-in user's existing review for a product, or
-// review: null if they haven't reviewed it yet — lets the frontend
-// decide between showing a create form or an edit form.
-// ==================================================================
-async function getMyReviewForProduct(req, res) {
-  const { productId } = req.query;
-  console.log({ route: "GET /api/products/get-my-review", productId, userId: req.user.id, status: "fetching own review" });
-
-  if (!productId) {
-    console.log({ route: "GET /api/products/get-my-review", productId, userId: req.user.id, status: 400, message: "productId is required" });
-    return res.status(400).json({ success: false, message: "productId is required" });
-  }
-
-  try {
-    const result = await db.query(
-      "SELECT * FROM product_reviews WHERE product_id = $1 AND user_id = $2",
-      [productId, req.user.id]
-    );
-    console.log({ route: "GET /api/products/get-my-review", productId, userId: req.user.id, status: 200, found: result.rows.length > 0 });
-    return res.json({
-      success: true,
-      review: result.rows.length > 0 ? formatReview(result.rows[0]) : null
-    });
-  } catch (err) {
-    console.error({ route: "GET /api/products/get-my-review", productId, userId: req.user.id, status: 500, error: err.message });
-    return res.status(500).json({ success: false, message: "Internal server error" });
-  }
-}
-
-// ==================================================================
 // PUBLIC — GET /api/products/similar?productId=&limit=
 // Returns products in the same category, excluding the given product.
 // ==================================================================
@@ -1246,7 +1023,5 @@ module.exports = {
   getAllProducts, getProductBySlug, getWeightLabels, getSimilarProducts,
   createProduct, updateProduct, deleteProduct,
   addVariant, updateVariant, deleteVariant,
-  addImage, addImages, deleteImage,
-  addReview, deleteReview,
-  updateReview, deleteMyReview, getMyReviewForProduct
+  addImage, addImages, deleteImage
 };

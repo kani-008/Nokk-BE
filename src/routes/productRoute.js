@@ -5,8 +5,6 @@ const {
   createProduct, updateProduct, deleteProduct,
   addVariant, updateVariant, deleteVariant,
   addImage, addImages, deleteImage,
-  addReview, deleteReview,
-  updateReview, deleteMyReview, getMyReviewForProduct,
 } = require("../controllers/productController.js");
 const { authenticate, isAdmin } = require("../middleware/auth.js");
 const { uploadProduct } = require("../controllers/uploadController.js");
@@ -19,12 +17,6 @@ router.get("/get-all",       getAllProducts);
 router.get("/get-by-slug",   getProductBySlug);
 router.get("/weight-labels", getWeightLabels);
 router.get("/similar",       getSimilarProducts);
-
-// Customer (login required)
-router.post  ("/add-review",     authenticate, addReview);
-router.put   ("/update-review",  authenticate, updateReview);
-router.delete("/delete-my-review", authenticate, deleteMyReview);
-router.get   ("/get-my-review",  authenticate, getMyReviewForProduct);
 
 // Admin — product
 router.post  ("/create-product", authenticate, isAdmin, createProduct);
@@ -41,7 +33,7 @@ router.post  ("/add-image",    authenticate, isAdmin, productImageUpload,  addIm
 router.post  ("/add-images",   authenticate, isAdmin, productImagesUpload, addImages); // bulk, 3-5 typical
 router.delete("/delete-image", authenticate, isAdmin, deleteImage);
 
-// Admin — reviews
-router.delete("/delete-review", authenticate, isAdmin, deleteReview);
+// Review routes (add/update/delete-my/get-my/delete) now live in
+// reviewRoute.js, mounted separately at /api/products in server.js.
 
 module.exports = router;

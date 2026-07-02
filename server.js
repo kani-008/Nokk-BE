@@ -13,6 +13,7 @@ const userRoute = require("./src/routes/userRoute.js");
 const orderRoute = require("./src/routes/orderRoute.js");
 const categoryRoute = require("./src/routes/categoryRoute.js");
 const productRoute = require("./src/routes/productRoute.js");
+const reviewRoute = require("./src/routes/reviewRoute.js");
 const cartRoute = require("./src/routes/cartRoute.js");
 const wishlistRoute = require("./src/routes/wishlistRoute.js");
 const bannerRoute = require("./src/routes/bannerRoute.js");
@@ -101,6 +102,7 @@ app.use("/api/users", userRoute); // profile + addresses (self) | CRUD (admin)
 app.use("/api/orders", orderRoute); // checkout, my-orders (customer) | manage (admin)
 app.use("/api/categories", categoryRoute); // public list | CRUD (admin)
 app.use("/api/products", productRoute); // public list | CRUD + variants + images (admin)
+app.use("/api/products", reviewRoute); // reviews: add/update/delete-my/get-my (customer) | delete (admin)
 app.use("/api/cart", cartRoute); // add, update, remove, clear (login required)
 app.use("/api/wishlist", wishlistRoute); // add, remove, clear (login required)
 app.use("/api/banners", bannerRoute); // public active | CRUD (admin)

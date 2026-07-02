@@ -30,6 +30,19 @@ const uploadProduct = multer({
       : cb(new Error(`Only JPEG, PNG and WebP images are allowed`)),
 });
 
+// 3 MB per-file limit, max 3 files per request, for customer-submitted
+// review photos (unpredictable volume, so kept intentionally smaller than
+// the admin product-image cap — do not raise either without checking
+// storage consumption first).
+const uploadReview = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 3 * 1024 * 1024, files: 3 },
+  fileFilter: (_req, file, cb) =>
+    IMAGE_TYPES.has(file.mimetype)
+      ? cb(null, true)
+      : cb(new Error(`Only JPEG, PNG and WebP images are allowed`)),
+});
+
 // ==================================================================
 // ADMIN — POST /api/upload/banner
 // Multipart fields: file (required), kind ("video" | "image")
@@ -90,6 +103,40 @@ async function uploadProductImage(req, res) {
 }
 
 // ==================================================================
+// CUSTOMER — POST /api/upload/review-image   (login required, not admin)
+// Multipart fields: file (JPEG/PNG/WebP, max 3 MB), slug (required)
+// Files are stored under review/{slug}/... — every customer's review
+// photos for a product land in that same shared folder (no per-user
+// subfolders), same flat convention as review/{slug} in the spec.
+// Response: { success, url }
+// ==================================================================
+async function uploadReviewImage(req, res) {
+  const { file } = req;
+  const slug = (req.body.slug || "").trim();
+
+  if (!file) {
+    return res.status(400).json({ success: false, message: "No file provided" });
+  }
+  if (!slug) {
+    return res.status(400).json({ success: false, message: "slug is required to know which product folder to upload into" });
+  }
+
+  console.log({ route: "POST /api/upload/review-image", slug, userId: req.user?.id, file: file.originalname, size: file.size });
+
+  try {
+    const url = await uploadToSupabase(file.buffer, file.mimetype, file.originalname, `review/${slug}`);
+    console.log({ route: "POST /api/upload/review-image", status: 200, url });
+    return res.status(200).json({ success: true, url });
+  } catch (err) {
+    const isSupabaseError = err.message && err.message.includes("Storage upload failed");
+    const statusCode = isSupabaseError ? 502 : 500;
+    const msg = isSupabaseError ? err.message : "Internal server error";
+    console.error({ route: "POST /api/upload/review-image", status: statusCode, error: err.message });
+    return res.status(statusCode).json({ success: false, message: msg });
+  }
+}
+
+// ==================================================================
 // ADMIN — DELETE /api/upload/delete-file
 // Body: { url }
 // Delete file from Supabase storage directly.
@@ -112,4 +159,4 @@ async function deleteUploadedFile(req, res) {
   }
 }
 
-module.exports = { upload, uploadProduct, uploadBannerFile, uploadProductImage, deleteUploadedFile };
+module.exports = { upload, uploadProduct, uploadReview, uploadBannerFile, uploadProductImage, uploadReviewImage, deleteUploadedFile };
