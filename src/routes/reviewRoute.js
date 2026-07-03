@@ -4,12 +4,16 @@ const {
   addReview, deleteReview,
   updateReview, deleteMyReview, getMyReviewForProduct,
   adminGetAllReviews, adminApproveReview,
+  getProductReviews,
 } = require("../controllers/reviewController.js");
 const { authenticate, isAdmin } = require("../middleware/auth.js");
 
 // Mounted at /api/products alongside productRoute so URLs are unchanged
 // (e.g. POST /api/products/add-review) while the controller/route code
 // for reviews lives in its own file.
+
+// Public — no auth
+router.get   ("/get-reviews",        getProductReviews);
 
 // Customer (login required)
 router.post  ("/add-review",       authenticate, addReview);
