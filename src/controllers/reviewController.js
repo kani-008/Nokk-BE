@@ -360,16 +360,23 @@ async function getMyReviewForProduct(req, res) {
 
 // ==================================================================
 // ADMIN — GET /api/products/admin-reviews   (isAdmin required)
+// Optional query param: ?productId=<id>  — when provided, returns only
+// that product's reviews; when absent, returns every review (for counts).
 // ==================================================================
 async function adminGetAllReviews(req, res) {
-  console.log({ route: "GET /api/products/admin-reviews", userId: req.user.id, status: "fetching all reviews for admin" });
+  const { productId } = req.query;
+  console.log({ route: "GET /api/products/admin-reviews", userId: req.user.id, productId: productId || "all", status: "fetching reviews for admin" });
   try {
+    const params = productId ? [productId] : [];
+    const whereClause = productId ? "WHERE pr.product_id = $1" : "";
     const result = await db.query(
       `SELECT pr.*, u.full_name AS user_name, u.phone AS user_phone, p.name_en AS product_name
        FROM product_reviews pr
        LEFT JOIN users u ON u.id = pr.user_id
        LEFT JOIN products p ON p.id = pr.product_id
-       ORDER BY pr.created_at DESC`
+       ${whereClause}
+       ORDER BY pr.created_at DESC`,
+      params
     );
 
     const reviewIds = result.rows.map(r => r.id);
