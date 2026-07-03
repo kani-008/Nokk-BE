@@ -227,7 +227,8 @@ async function _createOrderCore(client, {
     settings[r.key] = val;
   });
   const freeShippingThreshold = settings.freeShippingThreshold !== undefined ? Number(settings.freeShippingThreshold) : 499;
-  const flatDeliveryCharge    = settings.flatDeliveryCharge    !== undefined ? Number(settings.flatDeliveryCharge)    : 60;
+  // shippingCharge is the canonical key saved by the Settings page; flatDeliveryCharge is legacy
+  const flatDeliveryCharge    = Number(settings.shippingCharge ?? settings.flatDeliveryCharge ?? 60);
   const minOrderValue         = settings.minOrderValue         !== undefined ? Number(settings.minOrderValue)         : 0;
   console.log(`${tag} STEP 3 — delivery settings: freeShippingThreshold=₹${freeShippingThreshold}, flatDeliveryCharge=₹${flatDeliveryCharge}, minOrderValue=₹${minOrderValue}`);
 
@@ -235,6 +236,21 @@ async function _createOrderCore(client, {
   if (minOrderValue > 0 && serverSubtotal < minOrderValue) {
     console.log(`${tag} STEP 3 FAIL — subtotal ₹${serverSubtotal} below minOrderValue ₹${minOrderValue}`);
     const e = new Error(`Minimum order value of ₹${minOrderValue} required`);
+    e.status = 400; throw e;
+  }
+
+  // Enforce payment method enabled
+  const methodKey = {
+    cod: "codEnabled",
+    upi: "upiEnabled",
+    razorpay_upi: "upiEnabled",
+    razorpay: "cardEnabled",
+    razorpay_card: "cardEnabled",
+    razorpay_netbanking: "cardEnabled",
+  }[paymentMethod];
+  if (methodKey && settings[methodKey] === false) {
+    console.log(`${tag} STEP 3 FAIL — payment method "${paymentMethod}" is disabled`);
+    const e = new Error(`Payment method "${paymentMethod}" is currently unavailable`);
     e.status = 400; throw e;
   }
 

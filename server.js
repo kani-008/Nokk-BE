@@ -28,6 +28,7 @@ const uploadRoute = require("./src/routes/uploadRoute.js");
 const notificationRoute = require("./src/routes/notificationRoute.js");
 const locationRoute = require("./src/routes/locationRoute.js");
 const sitemapRoute = require("./src/routes/sitemapRoute.js");
+const { maintenanceGuard } = require("./src/middleware/maintenance.js");
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -99,6 +100,9 @@ app.get("/", (req, res) => {
 
 // ── Sitemap — mounted at root before /api routes, no auth ─────────
 app.use("/sitemap.xml", sitemapRoute);
+
+// ── Maintenance mode guard (runs before all API routes, skips auth + settings) ──
+app.use("/api", maintenanceGuard);
 
 // ── API routes ────────────────────────────────────────────────────
 app.use("/api/auth", loginRoute); // login, OTP, reset-password, refresh, logout
