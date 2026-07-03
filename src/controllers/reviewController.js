@@ -115,9 +115,9 @@ async function addReview(req, res) {
     const result = await db.query(
       `INSERT INTO product_reviews
          (product_id, user_id, rating, title, comment, is_approved, is_verified, order_id)
-       VALUES ($1,$2,$3,$4,$5,TRUE,TRUE,$6)
+       VALUES ($1,$2,$3,$4,$5,$7,TRUE,$6)
        RETURNING *`,
-      [id, req.user.id, rating, title || null, comment || null, orderId]
+      [id, req.user.id, rating, title || null, comment || null, orderId, rating >= 3]
     );
     const review = result.rows[0];
 
@@ -533,10 +533,38 @@ async function getProductReviews(req, res) {
   }
 }
 
+// ==================================================================
+// ADMIN — GET /api/products/admin-review-counts   (isAdmin required)
+// Returns one row per product that has at least one review:
+// { counts: { [productId]: { total, pending } } }
+// Lightweight alternative to fetching all review rows just for counts.
+// ==================================================================
+async function adminGetReviewCounts(req, res) {
+  console.log({ route: "GET /api/products/admin-review-counts", userId: req.user.id, status: "fetching review counts" });
+  try {
+    const result = await db.query(
+      `SELECT product_id,
+              COUNT(*)::int                                    AS total,
+              COUNT(*) FILTER (WHERE NOT is_approved)::int     AS pending
+       FROM product_reviews
+       GROUP BY product_id`
+    );
+    const counts = {};
+    result.rows.forEach(r => {
+      counts[r.product_id] = { total: r.total, pending: r.pending };
+    });
+    console.log({ route: "GET /api/products/admin-review-counts", status: 200, products: result.rows.length });
+    return res.json({ success: true, counts });
+  } catch (err) {
+    console.error({ route: "GET /api/products/admin-review-counts", error: err.message });
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+}
+
 module.exports = {
   formatReview, fetchReviewsForProduct,
   addReview, deleteReview,
   updateReview, deleteMyReview, getMyReviewForProduct,
-  adminGetAllReviews, adminApproveReview,
+  adminGetAllReviews, adminApproveReview, adminGetReviewCounts,
   getProductReviews,
 };

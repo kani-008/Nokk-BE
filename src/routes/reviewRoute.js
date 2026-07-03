@@ -3,7 +3,7 @@ const router  = express.Router();
 const {
   addReview, deleteReview,
   updateReview, deleteMyReview, getMyReviewForProduct,
-  adminGetAllReviews, adminApproveReview,
+  adminGetAllReviews, adminApproveReview, adminGetReviewCounts,
   getProductReviews,
 } = require("../controllers/reviewController.js");
 const { authenticate, isAdmin } = require("../middleware/auth.js");
@@ -22,8 +22,9 @@ router.delete("/delete-my-review", authenticate, deleteMyReview);
 router.get   ("/get-my-review",    authenticate, getMyReviewForProduct);
 
 // Admin — moderation
-router.delete("/delete-review",        authenticate, isAdmin, deleteReview);
-router.get   ("/admin-reviews",        authenticate, isAdmin, adminGetAllReviews);
-router.put   ("/admin-approve-review", authenticate, isAdmin, adminApproveReview);
+router.delete("/delete-review",          authenticate, isAdmin, deleteReview);
+router.get   ("/admin-reviews",          authenticate, isAdmin, adminGetAllReviews);
+router.get   ("/admin-review-counts",    authenticate, isAdmin, adminGetReviewCounts);
+router.put   ("/admin-approve-review",   authenticate, isAdmin, adminApproveReview);
 
 module.exports = router;
