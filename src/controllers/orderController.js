@@ -263,7 +263,7 @@ async function _createOrderCore(client, {
     console.log(`${tag} STEP 4 — validating coupon: ${couponApplied}`);
     const couponCode = String(couponApplied).trim().toUpperCase();
     const couponRes = await client.query(
-      "SELECT * FROM coupons WHERE code = $1 AND is_active = TRUE",
+      "SELECT * FROM coupons WHERE code = $1 AND is_active = TRUE FOR UPDATE",
       [couponCode]
     );
     if (couponRes.rows.length === 0) {
@@ -378,7 +378,11 @@ async function _createOrderCore(client, {
       "INSERT INTO coupon_usages (coupon_id, user_id, order_id) VALUES ($1, $2, $3)",
       [appliedCouponId, userId, orderId]
     );
-    console.log(`${tag} STEP 8 — coupon usage tracked in coupon_usages: ${couponApplied}`);
+    await client.query(
+      "UPDATE coupons SET usage_count = usage_count + 1 WHERE id = $1",
+      [appliedCouponId]
+    );
+    console.log(`${tag} STEP 8 — coupon usage tracked in coupon_usages and usage_count incremented: ${couponApplied}`);
   }
 
   // Initial timeline entry
@@ -1170,6 +1174,16 @@ async function createRazorpayOrder(req, res) {
       if (c.max_uses !== null && parseInt(c.usage_count) >= c.max_uses) {
         return res.status(400).json({ success: false, message: "Coupon usage limit reached" });
       }
+      if (c.max_uses_per_user !== null) {
+        const userUsageRes = await db.query(
+          "SELECT COUNT(*) AS count FROM coupon_usages WHERE coupon_id = $1 AND user_id = $2",
+          [c.id, userId]
+        );
+        const userUsageCount = parseInt(userUsageRes.rows[0].count) || 0;
+        if (userUsageCount >= c.max_uses_per_user) {
+          return res.status(400).json({ success: false, message: "You have reached your personal usage limit for this coupon" });
+        }
+      }
       if (serverSubtotal < parseFloat(c.min_order)) {
         return res.status(400).json({ success: false, message: `Minimum order of ₹${c.min_order} required for this coupon` });
       }
@@ -1413,6 +1427,19 @@ async function verifyRazorpayPayment(req, res) {
     });
   } catch (err) {
     await client.query("ROLLBACK");
+
+    // Attempt automatic refund since payment succeeded but order creation failed
+    try {
+      console.log(`[RAZORPAY VERIFY] Attempting automatic refund for paymentId=${razorpay_payment_id} due to verification error: ${err.message}`);
+      await getRazorpayClient().payments.refund(razorpay_payment_id);
+      console.log(`[RAZORPAY VERIFY] Refund successful for paymentId=${razorpay_payment_id}`);
+    } catch (refundErr) {
+      console.error(`[RAZORPAY VERIFY] Refund failed for paymentId=${razorpay_payment_id}:`, refundErr.message);
+    }
+
+    // Clean up pending record so webhook fallback doesn't trigger
+    await db.query("DELETE FROM pending_razorpay_orders WHERE razorpay_order_id = $1", [razorpay_order_id]).catch(() => {});
+
     if (err.status) {
       console.log(`[RAZORPAY VERIFY] ${err.status} ERROR — ${err.message} userId=${userId}`);
       console.log("=".repeat(60));
@@ -1571,6 +1598,23 @@ async function handleRazorpayWebhook(req, res) {
   } catch (err) {
     await client.query("ROLLBACK");
     console.error({ route: "Razorpay Webhook", event: "payment.captured", error: err.message, rpOrderId });
+
+    if (err.status === 400) {
+      // Permanent validation failure — initiate refund and return 200 (done/no retry needed)
+      try {
+        console.log(`[Razorpay Webhook] Permanent validation failure (status=400): ${err.message}. Initiating refund for paymentId=${rpPaymentId}`);
+        await getRazorpayClient().payments.refund(rpPaymentId);
+        console.log(`[Razorpay Webhook] Refund successful for paymentId=${rpPaymentId}`);
+        // Delete pending record so it doesn't process again
+        await db.query("DELETE FROM pending_razorpay_orders WHERE razorpay_order_id = $1", [rpOrderId]).catch(() => {});
+        return res.status(200).json({ success: true, message: `Validation failed: ${err.message}. Payment refunded.` });
+      } catch (refundErr) {
+        console.error(`[Razorpay Webhook] Refund failed for paymentId=${rpPaymentId}:`, refundErr.message);
+        // Return 500 so Razorpay retries, giving us another chance to refund or alert admin
+        return res.status(500).json({ success: false, message: `Validation failed but refund failed: ${refundErr.message}` });
+      }
+    }
+
     // Return 500 so Razorpay retries on transient errors
     return res.status(500).json({ success: false });
   } finally {
