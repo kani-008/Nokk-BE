@@ -201,7 +201,7 @@ async function getAllProducts(req, res) {
     AND ($6::numeric IS NULL OR v.min_price >= $6)
     AND ($7::numeric IS NULL OR v.min_price <= $7)
     AND ($8::numeric IS NULL OR v.avg_rating >= $8)
-    AND (NOT $9 OR EXISTS (
+    AND (NOT $9 OR v.active_offer_id IS NOT NULL OR EXISTS (
           SELECT 1 FROM product_variants pv
           WHERE pv.product_id = v.id
             AND pv.is_active = TRUE

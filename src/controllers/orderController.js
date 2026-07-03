@@ -102,6 +102,7 @@ function formatItem(i) {
     productId: i.product_id,
     variantId: i.variant_id,
     name: i.name_ta ? `${i.name_en} (${i.name_ta})` : i.name_en,
+    productName: i.name_en,
     weight: i.weight,
     price: num(i.price),
     quantity: parseInt(i.quantity),
@@ -109,6 +110,8 @@ function formatItem(i) {
     imageUrl: i.primary_image || null,
     slug: i.slug || null,
     isReviewed: i.is_reviewed === true,
+    comboId: i.combo_id || null,
+    comboName: i.combo_name || null,
   };
 }
 
@@ -124,6 +127,7 @@ async function fetchItemsAndTimeline(orderId, reviewerUserId = null) {
   const [itemsRes, timelineRes] = await Promise.all([
     db.query(
       `SELECT oi.id, oi.product_id, oi.variant_id, oi.name_en, oi.name_ta, oi.weight, oi.price, oi.quantity,
+              oi.combo_id, oi.combo_name,
               pi.image_url AS primary_image, p.slug,
               (pr.id IS NOT NULL) AS is_reviewed
        FROM order_items oi
@@ -160,6 +164,7 @@ async function fetchItemsAndTimelinesForOrders(orderIds, reviewerUserId = null) 
   const [itemsRes, timelineRes] = await Promise.all([
     db.query(
       `SELECT oi.id, oi.order_id, oi.product_id, oi.variant_id, oi.name_en, oi.name_ta, oi.weight, oi.price, oi.quantity,
+              oi.combo_id, oi.combo_name,
               pi.image_url AS primary_image, p.slug,
               (pr.id IS NOT NULL) AS is_reviewed
        FROM order_items oi
