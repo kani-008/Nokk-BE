@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const {
   getActiveOffers,
+  getActiveStoreWideOffer,
   getAllOffers,
   getOfferById,
   createOffer,
@@ -16,6 +17,7 @@ const offerUpload = uploadProduct.single("imageFile");
 
 // Public — live offers only
 router.get("/get-active", getActiveOffers);
+router.get("/active-storewide", getActiveStoreWideOffer);
 
 // Admin
 router.get("/get-all", authenticate, isAdmin, getAllOffers);

@@ -39,6 +39,21 @@ function formatProduct(p, variants = [], images = [], reviews = []) {
     primaryImage: p.primary_image || (images.find(i => i.isPrimary)?.imageUrl) || null,
     createdAt: p.created_at,
     updatedAt: p.updated_at,
+    // Sourced from v_products_with_price when the row came from that view
+    // (getAllProducts/getProductBySlug/getSimilarProducts); absent (→ null/
+    // minPrice) on rows sourced from a plain `products` query, e.g.
+    // createProduct/updateProduct's own INSERT/UPDATE ... RETURNING.
+    activeOffer: p.active_offer_id
+      ? {
+          id: p.active_offer_id,
+          type: p.active_offer_type,
+          discountValue: num(p.active_offer_discount_value),
+          maxDiscount: p.active_offer_max_discount != null ? num(p.active_offer_max_discount) : null,
+        }
+      : null,
+    effectivePrice: p.effective_min_price != null
+      ? num(p.effective_min_price)
+      : num(p.min_price ?? (variants.length ? Math.min(...variants.map(v => v.price)) : Infinity)),
     variants,
     images,
     reviews

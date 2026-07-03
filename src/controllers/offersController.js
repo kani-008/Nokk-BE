@@ -4,7 +4,7 @@ const { uploadToSupabase, deleteFromSupabase } = require("../config/supabase.js"
 // Live offers table columns:
 // id, name, description, discount_value, product_id, category_id,
 // min_order_value, max_discount, start_date, end_date, is_active,
-// created_at, updated_at, offer_type, applies_to, code
+// created_at, updated_at, offer_type, applies_to
 
 const num = (v) => parseFloat(v) || 0;
 
@@ -31,7 +31,6 @@ function formatOffer(o) {
     updatedAt: o.updated_at,
     offerType: o.offer_type,
     appliesTo: o.applies_to,
-    code: o.code,
     imageUrl: o.image_url || null
   };
 }
@@ -61,6 +60,47 @@ async function getActiveOffers(req, res) {
     return res.json({ success: true, offers: result.rows.map(formatOffer) });
   } catch (err) {
     console.error({ route: "GET /api/offers", status: 500, error: err.message });
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+}
+
+// ==================================================================
+// PUBLIC — GET /api/offers/active-storewide
+// The single currently-live applies_to='all' offer, or null.
+// Used by the storefront to show an automatic "spend ₹X, get Y% off"
+// banner with no code required. Newest live store-wide offer wins if
+// more than one somehow exists (createOffer guards against creating
+// a second one while one is already live — see below).
+// ==================================================================
+async function getActiveStoreWideOffer(req, res) {
+  console.log({ route: "GET /api/offers/active-storewide", status: "fetching active store-wide offer" });
+  try {
+    const result = await db.query(
+      `SELECT * FROM offers
+       WHERE applies_to = 'all'
+         AND is_active = TRUE
+         AND (start_date IS NULL OR start_date <= NOW())
+         AND (end_date   IS NULL OR end_date   >= NOW())
+       ORDER BY created_at DESC
+       LIMIT 1`
+    );
+    if (result.rows.length === 0) {
+      console.log({ route: "GET /api/offers/active-storewide", status: 200, found: false });
+      return res.json({ success: true, offer: null });
+    }
+    const o = result.rows[0];
+    console.log({ route: "GET /api/offers/active-storewide", status: 200, found: true, offerId: o.id });
+    return res.json({
+      success: true,
+      offer: {
+        discountValue: num(o.discount_value),
+        offerType: o.offer_type,
+        maxDiscount: o.max_discount ? num(o.max_discount) : null,
+        minOrderValue: num(o.min_order_value),
+      }
+    });
+  } catch (err) {
+    console.error({ route: "GET /api/offers/active-storewide", status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -127,7 +167,9 @@ async function getOfferById(req, res) {
 // Create a new offer campaign.
 // Body: { name, description?, discountValue, productId?, categoryId?,
 //         minOrderValue?, maxDiscount?, startDate?, endDate?, isActive?,
-//         offerType?, appliesTo?, code? }
+//         offerType?, appliesTo? }
+// minOrderValue is only meaningful for appliesTo === "all" — a per-product
+// or per-category price reduction must never depend on total cart value.
 // ==================================================================
 async function createOffer(req, res) {
   let {
@@ -135,13 +177,13 @@ async function createOffer(req, res) {
     productId, categoryId,
     minOrderValue, maxDiscount,
     startDate, endDate, isActive,
-    offerType, appliesTo, code
+    offerType, appliesTo
   } = req.body;
   let imageUrl = null;
   if (req.file) {
     imageUrl = await uploadToSupabase(req.file.buffer, req.file.mimetype, req.file.originalname, "offer");
   }
-  console.log({ route: "POST /api/offers", body: { name, discountValue, productId, categoryId, minOrderValue, maxDiscount, startDate, endDate, isActive, offerType, appliesTo, code }, status: "creating offer" });
+  console.log({ route: "POST /api/offers", body: { name, discountValue, productId, categoryId, minOrderValue, maxDiscount, startDate, endDate, isActive, offerType, appliesTo }, status: "creating offer" });
 
   if (!name || discountValue == null) {
     console.log({ route: "POST /api/offers", status: 400, message: "name and discountValue are required" });
@@ -187,18 +229,25 @@ async function createOffer(req, res) {
     return res.status(400).json({ success: false, message: "Invalid appliesTo" });
   }
 
-  let upperCode = null;
-  if (code && String(code).trim()) {
-    upperCode = String(code).trim().toUpperCase();
-    try {
-      const dup = await db.query("SELECT id FROM offers WHERE UPPER(code) = $1", [upperCode]);
-      if (dup.rows.length > 0) {
-        console.log({ route: "POST /api/offers", code: upperCode, status: 409, message: "offer code already exists" });
-        return res.status(409).json({ success: false, message: "Offer code already exists" });
-      }
-    } catch (err) {
-      console.error({ route: "POST /api/offers", error: err.message });
-      return res.status(500).json({ success: false, message: "Internal server error" });
+  // Only store-wide offers may carry a minimum order value — a product/category
+  // price reduction must never depend on total cart value.
+  if (applies !== "all" && Number(minOrderValue) > 0) {
+    console.log({ route: "POST /api/offers", status: 400, message: "minOrderValue not allowed for product/category offers" });
+    return res.status(400).json({ success: false, message: "Minimum order value can only be set on store-wide offers" });
+  }
+  const finalMinOrderValue = applies === "all" ? (minOrderValue || 0) : 0;
+
+  if (applies === "all") {
+    const liveAllOffer = await db.query(
+      `SELECT id FROM offers
+       WHERE applies_to = 'all'
+         AND is_active = TRUE
+         AND (start_date IS NULL OR start_date <= NOW())
+         AND (end_date   IS NULL OR end_date   >= NOW())`
+    );
+    if (liveAllOffer.rows.length > 0) {
+      console.log({ route: "POST /api/offers", status: 409, message: "a store-wide offer is already live" });
+      return res.status(409).json({ success: false, message: "A store-wide offer is already live. Deactivate or end it before creating another." });
     }
   }
 
@@ -207,8 +256,8 @@ async function createOffer(req, res) {
       `INSERT INTO offers
          (name, description, discount_value, product_id, category_id,
           min_order_value, max_discount, start_date, end_date, is_active,
-          offer_type, applies_to, code, image_url)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+          offer_type, applies_to, image_url)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
        RETURNING *`,
       [
         name.trim(),
@@ -216,14 +265,13 @@ async function createOffer(req, res) {
         discountValue,
         applies === "product" ? productId : null,
         applies === "category" ? categoryId : null,
-        minOrderValue || 0,
+        finalMinOrderValue,
         maxDiscount || null,
         startDate || null,
         endDate || null,
         isActive ?? true,
         type,
         applies,
-        upperCode,
         imageUrl
       ]
     );
@@ -245,12 +293,12 @@ async function updateOffer(req, res) {
     productId, categoryId,
     minOrderValue, maxDiscount,
     startDate, endDate, isActive,
-    offerType, appliesTo, code
+    offerType, appliesTo
   } = req.body;
   let newImageUrl = req.file
     ? await uploadToSupabase(req.file.buffer, req.file.mimetype, req.file.originalname, "offer")
     : undefined;
-  console.log({ route: "PUT /api/offers/update-offer", offerId: id, body: { name, description, discountValue, productId, categoryId, minOrderValue, maxDiscount, startDate, endDate, isActive, offerType, appliesTo, code }, status: "updating offer" });
+  console.log({ route: "PUT /api/offers/update-offer", offerId: id, body: { name, description, discountValue, productId, categoryId, minOrderValue, maxDiscount, startDate, endDate, isActive, offerType, appliesTo }, status: "updating offer" });
 
   if (!id) {
     console.log({ route: "PUT /api/offers/update-offer", status: 400, message: "id is required" });
@@ -301,22 +349,31 @@ async function updateOffer(req, res) {
       return res.status(400).json({ success: false, message: "Invalid appliesTo" });
     }
 
-    let upperCode = existing.code;
-    if (code !== undefined) {
-      if (code && String(code).trim()) {
-        upperCode = String(code).trim().toUpperCase();
-        const dup = await db.query("SELECT id FROM offers WHERE UPPER(code) = $1 AND id != $2", [upperCode, id]);
-        if (dup.rows.length > 0) {
-          return res.status(409).json({ success: false, message: "Offer code already exists" });
-        }
-      } else {
-        upperCode = null;
+    // Only store-wide offers may carry a minimum order value.
+    if (currentApplies !== "all" && minOrderValue !== undefined && Number(minOrderValue) > 0) {
+      return res.status(400).json({ success: false, message: "Minimum order value can only be set on store-wide offers" });
+    }
+
+    if (currentApplies === "all") {
+      const liveAllOffer = await db.query(
+        `SELECT id FROM offers
+         WHERE applies_to = 'all'
+           AND is_active = TRUE
+           AND (start_date IS NULL OR start_date <= NOW())
+           AND (end_date   IS NULL OR end_date   >= NOW())
+           AND id != $1`
+      , [id]);
+      const willBeLive = (isActive !== undefined ? isActive : existing.is_active) === true;
+      if (willBeLive && liveAllOffer.rows.length > 0) {
+        return res.status(409).json({ success: false, message: "A store-wide offer is already live. Deactivate or end it before activating another." });
       }
     }
 
     const finalName = name !== undefined ? name.trim() : existing.name;
     const finalDesc = description !== undefined ? (description || null) : existing.description;
-    const finalMinOrder = minOrderValue !== undefined ? minOrderValue : existing.min_order_value;
+    const finalMinOrder = currentApplies === "all"
+      ? (minOrderValue !== undefined ? minOrderValue : existing.min_order_value)
+      : 0;
     const finalMaxDiscount = maxDiscount !== undefined ? (maxDiscount || null) : existing.max_discount;
     const finalStartDate = startDate !== undefined ? (startDate || null) : existing.start_date;
     const finalEndDate = endDate !== undefined ? (endDate || null) : existing.end_date;
@@ -337,10 +394,9 @@ async function updateOffer(req, res) {
          is_active       = $10,
          offer_type      = $11,
          applies_to      = $12,
-         code            = $13,
-         image_url       = $14,
+         image_url       = $13,
          updated_at      = NOW()
-       WHERE id = $15
+       WHERE id = $14
        RETURNING *`,
       [
         finalName,
@@ -355,7 +411,6 @@ async function updateOffer(req, res) {
         finalIsActive,
         currentType,
         currentApplies,
-        upperCode,
         finalImageUrl,
         id
       ]
@@ -398,4 +453,8 @@ async function deleteOffer(req, res) {
   }
 }
 
-module.exports = { getActiveOffers, getAllOffers, getOfferById, createOffer, updateOffer, deleteOffer };
+module.exports = {
+  getActiveOffers, getActiveStoreWideOffer,
+  getAllOffers, getOfferById,
+  createOffer, updateOffer, deleteOffer
+};

@@ -20,6 +20,7 @@ const bannerRoute = require("./src/routes/bannerRoute.js");
 const btextRoute = require("./src/routes/btextRoute.js");
 const couponRoute = require("./src/routes/couponRoute.js");
 const offersRoute = require("./src/routes/offersRoute.js");
+const combosRoute = require("./src/routes/combosRoute.js");
 const inventoryRoute = require("./src/routes/inventoryRoute.js");
 const settingsRoute = require("./src/routes/settingsRoute.js");
 const dashboardRoute = require("./src/routes/dashboardRoute.js");
@@ -117,6 +118,7 @@ app.use("/api/banners", bannerRoute); // public active | CRUD (admin)
 app.use("/api/btext", btextRoute); // public active by banner | CRUD (admin)
 app.use("/api/coupons", couponRoute); // validate (customer) | CRUD (admin)
 app.use("/api/offers", offersRoute); // public live | CRUD (admin)
+app.use("/api/combos", combosRoute); // public live | CRUD (admin)
 app.use("/api/inventory", inventoryRoute); // stock management (admin only)
 app.use("/api/settings", settingsRoute); // public read | write (admin)
 app.use("/api/dashboard", dashboardRoute); // KPIs, reports, charts (admin only)
