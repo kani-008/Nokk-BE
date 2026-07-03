@@ -10,7 +10,6 @@ function formatCategory(c) {
     // Product card label rule: "English Name (Tamil Name)"
     label: c.name_ta ? `${c.name_en} (${c.name_ta})` : c.name_en,
     slug: c.slug,
-    description: c.description,
     imageUrl: c.image_url,
     sortOrder: c.sort_order,
     isActive: c.is_active,

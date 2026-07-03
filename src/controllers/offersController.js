@@ -1,4 +1,5 @@
 const db = require("../config/db.js");
+const { uploadToSupabase, deleteFromSupabase } = require("../config/supabase.js");
 
 // Live offers table columns:
 // id, name, description, discount_value, product_id, category_id,
@@ -30,7 +31,8 @@ function formatOffer(o) {
     updatedAt: o.updated_at,
     offerType: o.offer_type,
     appliesTo: o.applies_to,
-    code: o.code
+    code: o.code,
+    imageUrl: o.image_url || null
   };
 }
 
@@ -128,13 +130,17 @@ async function getOfferById(req, res) {
 //         offerType?, appliesTo?, code? }
 // ==================================================================
 async function createOffer(req, res) {
-  const {
+  let {
     name, description, discountValue,
     productId, categoryId,
     minOrderValue, maxDiscount,
     startDate, endDate, isActive,
     offerType, appliesTo, code
   } = req.body;
+  let imageUrl = null;
+  if (req.file) {
+    imageUrl = await uploadToSupabase(req.file.buffer, req.file.mimetype, req.file.originalname, "offer");
+  }
   console.log({ route: "POST /api/offers", body: { name, discountValue, productId, categoryId, minOrderValue, maxDiscount, startDate, endDate, isActive, offerType, appliesTo, code }, status: "creating offer" });
 
   if (!name || discountValue == null) {
@@ -201,8 +207,8 @@ async function createOffer(req, res) {
       `INSERT INTO offers
          (name, description, discount_value, product_id, category_id,
           min_order_value, max_discount, start_date, end_date, is_active,
-          offer_type, applies_to, code)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+          offer_type, applies_to, code, image_url)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
        RETURNING *`,
       [
         name.trim(),
@@ -217,7 +223,8 @@ async function createOffer(req, res) {
         isActive ?? true,
         type,
         applies,
-        upperCode
+        upperCode,
+        imageUrl
       ]
     );
     console.log({ route: "POST /api/offers", status: 201, offerId: result.rows[0].id });
@@ -233,13 +240,16 @@ async function createOffer(req, res) {
 // Update an existing offer. Only send fields you want to change.
 // ==================================================================
 async function updateOffer(req, res) {
-  const {
+  let {
     id, name, description, discountValue,
     productId, categoryId,
     minOrderValue, maxDiscount,
     startDate, endDate, isActive,
     offerType, appliesTo, code
   } = req.body;
+  let newImageUrl = req.file
+    ? await uploadToSupabase(req.file.buffer, req.file.mimetype, req.file.originalname, "offer")
+    : undefined;
   console.log({ route: "PUT /api/offers/update-offer", offerId: id, body: { name, description, discountValue, productId, categoryId, minOrderValue, maxDiscount, startDate, endDate, isActive, offerType, appliesTo, code }, status: "updating offer" });
 
   if (!id) {
@@ -311,6 +321,7 @@ async function updateOffer(req, res) {
     const finalStartDate = startDate !== undefined ? (startDate || null) : existing.start_date;
     const finalEndDate = endDate !== undefined ? (endDate || null) : existing.end_date;
     const finalIsActive = isActive !== undefined ? isActive : existing.is_active;
+    const finalImageUrl = newImageUrl !== undefined ? newImageUrl : existing.image_url;
 
     const result = await db.query(
       `UPDATE offers SET
@@ -327,8 +338,9 @@ async function updateOffer(req, res) {
          offer_type      = $11,
          applies_to      = $12,
          code            = $13,
+         image_url       = $14,
          updated_at      = NOW()
-       WHERE id = $14
+       WHERE id = $15
        RETURNING *`,
       [
         finalName,
@@ -344,9 +356,14 @@ async function updateOffer(req, res) {
         currentType,
         currentApplies,
         upperCode,
+        finalImageUrl,
         id
       ]
     );
+
+    if (newImageUrl && existing.image_url && newImageUrl !== existing.image_url) {
+      await deleteFromSupabase(existing.image_url);
+    }
 
     console.log({ route: "PUT /api/offers/update-offer", offerId: id, status: 200 });
     return res.json({ success: true, message: "Offer updated", offer: formatOffer(result.rows[0]) });
