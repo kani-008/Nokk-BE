@@ -18,22 +18,27 @@ function buildBannerText(offer, productName = null, categoryName = null) {
     : `₹${discVal} OFF`;
 
   let scope = "Everything";
-  if (offer.applies_to === "product" && productName) {
-    scope = productName;
-  } else if (offer.applies_to === "category" && categoryName) {
-    scope = categoryName;
-  }
+  if (offer.applies_to === "product" && productName) scope = productName;
+  else if (offer.applies_to === "category" && categoryName) scope = categoryName;
 
   const heading = `${discountText} — ${scope}`;
 
   const hasEndDate = offer.end_date && offer.end_date !== "";
-  const subtext = hasEndDate
-    ? `Ends ${new Date(offer.end_date).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}`
-    : "Limited time offer";
+  const endDateText = hasEndDate
+    ? `Ends ${new Date(offer.end_date).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}`
+    : null;
 
-  const endText = hasEndDate
-    ? ` · Ends ${new Date(offer.end_date).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}`
-    : "";
+  // Subtext priority: description + end date > description only > end date only > fallback
+  let subtext;
+  if (offer.description && offer.description.trim()) {
+    subtext = endDateText
+      ? `${offer.description.trim()} · ${endDateText}`
+      : offer.description.trim();
+  } else {
+    subtext = endDateText || "Limited time offer";
+  }
+
+  const endText = hasEndDate ? ` · ${endDateText}` : "";
   const announcement = `🔥 ${discountText} on ${scope}${endText}`;
 
   return { heading, subtext, announcement };
