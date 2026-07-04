@@ -1,9 +1,48 @@
 const db = require("../config/db.js");
+const { uploadToSupabase, deleteFromSupabase } = require("../config/supabase.js");
 
-// Live offers table columns:
-// id, name, description, discount_value, product_id, category_id,
-// min_order_value, max_discount, start_date, end_date, is_active,
-// created_at, updated_at, offer_type, applies_to, code
+async function updateSettingValue(key, value) {
+  await db.query(
+    `INSERT INTO settings (key, value, updated_at)
+     VALUES ($1, $2, NOW())
+     ON CONFLICT (key)
+     DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
+    [key, String(value)]
+  );
+}
+
+function buildBannerText(offer, productName = null, categoryName = null) {
+  const discVal = parseFloat(offer.discount_value);
+  const discountText = offer.offer_type === "percentage"
+    ? `${discVal}% OFF`
+    : `₹${discVal} OFF`;
+
+  let scope = "Everything";
+  if (offer.applies_to === "product" && productName) scope = productName;
+  else if (offer.applies_to === "category" && categoryName) scope = categoryName;
+
+  const heading = `${discountText} — ${scope}`;
+
+  const hasEndDate = offer.end_date && offer.end_date !== "";
+  const endDateText = hasEndDate
+    ? `Ends ${new Date(offer.end_date).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}`
+    : null;
+
+  // Subtext priority: description + end date > description only > end date only > fallback
+  let subtext;
+  if (offer.description && offer.description.trim()) {
+    subtext = endDateText
+      ? `${offer.description.trim()} · ${endDateText}`
+      : offer.description.trim();
+  } else {
+    subtext = endDateText || "Limited time offer";
+  }
+
+  const endText = hasEndDate ? ` · ${endDateText}` : "";
+  const announcement = `🔥 ${discountText} on ${scope}${endText}`;
+
+  return { heading, subtext, announcement };
+}
 
 const num = (v) => parseFloat(v) || 0;
 
@@ -30,7 +69,9 @@ function formatOffer(o) {
     updatedAt: o.updated_at,
     offerType: o.offer_type,
     appliesTo: o.applies_to,
-    code: o.code
+    imageUrl: o.image_url || null,
+    showAsBanner: o.show_as_banner ?? false,
+    showInAnnouncement: o.show_in_announcement ?? false
   };
 }
 
@@ -59,6 +100,47 @@ async function getActiveOffers(req, res) {
     return res.json({ success: true, offers: result.rows.map(formatOffer) });
   } catch (err) {
     console.error({ route: "GET /api/offers", status: 500, error: err.message });
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+}
+
+// ==================================================================
+// PUBLIC — GET /api/offers/active-storewide
+// The single currently-live applies_to='all' offer, or null.
+// Used by the storefront to show an automatic "spend ₹X, get Y% off"
+// banner with no code required. Newest live store-wide offer wins if
+// more than one somehow exists (createOffer guards against creating
+// a second one while one is already live — see below).
+// ==================================================================
+async function getActiveStoreWideOffer(req, res) {
+  console.log({ route: "GET /api/offers/active-storewide", status: "fetching active store-wide offer" });
+  try {
+    const result = await db.query(
+      `SELECT * FROM offers
+       WHERE applies_to = 'all'
+         AND is_active = TRUE
+         AND (start_date IS NULL OR start_date <= NOW())
+         AND (end_date   IS NULL OR end_date   >= NOW())
+       ORDER BY created_at DESC
+       LIMIT 1`
+    );
+    if (result.rows.length === 0) {
+      console.log({ route: "GET /api/offers/active-storewide", status: 200, found: false });
+      return res.json({ success: true, offer: null });
+    }
+    const o = result.rows[0];
+    console.log({ route: "GET /api/offers/active-storewide", status: 200, found: true, offerId: o.id });
+    return res.json({
+      success: true,
+      offer: {
+        discountValue: num(o.discount_value),
+        offerType: o.offer_type,
+        maxDiscount: o.max_discount ? num(o.max_discount) : null,
+        minOrderValue: num(o.min_order_value),
+      }
+    });
+  } catch (err) {
+    console.error({ route: "GET /api/offers/active-storewide", status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
@@ -125,17 +207,24 @@ async function getOfferById(req, res) {
 // Create a new offer campaign.
 // Body: { name, description?, discountValue, productId?, categoryId?,
 //         minOrderValue?, maxDiscount?, startDate?, endDate?, isActive?,
-//         offerType?, appliesTo?, code? }
+//         offerType?, appliesTo? }
+// minOrderValue is only meaningful for appliesTo === "all" — a per-product
+// or per-category price reduction must never depend on total cart value.
 // ==================================================================
 async function createOffer(req, res) {
-  const {
+  let {
     name, description, discountValue,
     productId, categoryId,
     minOrderValue, maxDiscount,
     startDate, endDate, isActive,
-    offerType, appliesTo, code
+    offerType, appliesTo,
+    showAsBanner, showInAnnouncement
   } = req.body;
-  console.log({ route: "POST /api/offers", body: { name, discountValue, productId, categoryId, minOrderValue, maxDiscount, startDate, endDate, isActive, offerType, appliesTo, code }, status: "creating offer" });
+  let imageUrl = null;
+  if (req.file) {
+    imageUrl = await uploadToSupabase(req.file.buffer, req.file.mimetype, req.file.originalname, "offer");
+  }
+  console.log({ route: "POST /api/offers", body: { name, discountValue, productId, categoryId, minOrderValue, maxDiscount, startDate, endDate, isActive, offerType, appliesTo, showAsBanner, showInAnnouncement }, status: "creating offer" });
 
   if (!name || discountValue == null) {
     console.log({ route: "POST /api/offers", status: 400, message: "name and discountValue are required" });
@@ -181,28 +270,39 @@ async function createOffer(req, res) {
     return res.status(400).json({ success: false, message: "Invalid appliesTo" });
   }
 
-  let upperCode = null;
-  if (code && String(code).trim()) {
-    upperCode = String(code).trim().toUpperCase();
-    try {
-      const dup = await db.query("SELECT id FROM offers WHERE UPPER(code) = $1", [upperCode]);
-      if (dup.rows.length > 0) {
-        console.log({ route: "POST /api/offers", code: upperCode, status: 409, message: "offer code already exists" });
-        return res.status(409).json({ success: false, message: "Offer code already exists" });
-      }
-    } catch (err) {
-      console.error({ route: "POST /api/offers", error: err.message });
-      return res.status(500).json({ success: false, message: "Internal server error" });
+  // Only store-wide offers may carry a minimum order value — a product/category
+  // price reduction must never depend on total cart value.
+  if (applies !== "all" && Number(minOrderValue) > 0) {
+    console.log({ route: "POST /api/offers", status: 400, message: "minOrderValue not allowed for product/category offers" });
+    return res.status(400).json({ success: false, message: "Minimum order value can only be set on store-wide offers" });
+  }
+  const finalMinOrderValue = applies === "all" ? (minOrderValue || 0) : 0;
+
+  if (applies === "all") {
+    const liveAllOffer = await db.query(
+      `SELECT id FROM offers
+       WHERE applies_to = 'all'
+         AND is_active = TRUE
+         AND (start_date IS NULL OR start_date <= NOW())
+         AND (end_date   IS NULL OR end_date   >= NOW())`
+    );
+    if (liveAllOffer.rows.length > 0) {
+      console.log({ route: "POST /api/offers", status: 409, message: "a store-wide offer is already live" });
+      return res.status(409).json({ success: false, message: "A store-wide offer is already live. Deactivate or end it before creating another." });
     }
   }
+
+  const asBool = (v) => v === true || v === "true";
+  const finalShowAsBanner = asBool(showAsBanner);
+  const finalShowInAnnouncement = asBool(showInAnnouncement);
 
   try {
     const result = await db.query(
       `INSERT INTO offers
          (name, description, discount_value, product_id, category_id,
           min_order_value, max_discount, start_date, end_date, is_active,
-          offer_type, applies_to, code)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+          offer_type, applies_to, image_url, show_as_banner, show_in_announcement)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
        RETURNING *`,
       [
         name.trim(),
@@ -210,18 +310,71 @@ async function createOffer(req, res) {
         discountValue,
         applies === "product" ? productId : null,
         applies === "category" ? categoryId : null,
-        minOrderValue || 0,
+        finalMinOrderValue,
         maxDiscount || null,
         startDate || null,
         endDate || null,
         isActive ?? true,
         type,
         applies,
-        upperCode
+        imageUrl,
+        finalShowAsBanner,
+        finalShowInAnnouncement
       ]
     );
-    console.log({ route: "POST /api/offers", status: 201, offerId: result.rows[0].id });
-    return res.status(201).json({ success: true, message: "Offer created", offer: formatOffer(result.rows[0]) });
+
+    const newOffer = result.rows[0];
+
+    // Post-create side effects
+    try {
+      let productName = null;
+      if (newOffer.applies_to === "product" && newOffer.product_id) {
+        const prodRes = await db.query("SELECT name_en FROM products WHERE id = $1", [newOffer.product_id]);
+        productName = prodRes.rows[0]?.name_en || null;
+      }
+      let categoryName = null;
+      if (newOffer.applies_to === "category" && newOffer.category_id) {
+        const catRes = await db.query("SELECT name_en FROM categories WHERE id = $1", [newOffer.category_id]);
+        categoryName = catRes.rows[0]?.name_en || null;
+      }
+
+      const textInfo = buildBannerText(newOffer, productName, categoryName);
+
+      // 1. Auto-create Banner + Slide text overlay
+      if (finalShowAsBanner && newOffer.image_url) {
+        const bannerRes = await db.query(
+          `INSERT INTO banners (title, subtitle, image_url, is_active, linked_offer_id)
+           VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+          [newOffer.name, newOffer.description, newOffer.image_url, newOffer.is_active, newOffer.id]
+        );
+        const newBannerId = bannerRes.rows[0].id;
+        await db.query(
+          `INSERT INTO btext (banner_id, heading, subtext, is_active)
+           VALUES ($1, $2, $3, $4)`,
+          [newBannerId, textInfo.heading, textInfo.subtext, newOffer.is_active]
+        );
+        console.log(`Auto-created banner ${newBannerId} and btext overlay for offer ${newOffer.id}`);
+      }
+
+      // 2. Auto-drive site Announcement
+      if (finalShowInAnnouncement) {
+        await updateSettingValue("announcementText", textInfo.announcement);
+        await updateSettingValue("announcementEnabled", "true");
+        await updateSettingValue("announcement_offer_owner", newOffer.id);
+        console.log(`Auto-driven site announcement for offer ${newOffer.id}`);
+      }
+    } catch (sideError) {
+      console.error("Warning: post-create offer side effects failed:", sideError.message);
+    }
+
+    console.log({
+      route: "POST /api/offers",
+      status: 201,
+      offerId: newOffer.id,
+      showAsBanner: finalShowAsBanner,
+      showInAnnouncement: finalShowInAnnouncement
+    });
+    return res.status(201).json({ success: true, message: "Offer created", offer: formatOffer(newOffer) });
   } catch (err) {
     console.error({ route: "POST /api/offers", status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
@@ -233,19 +386,25 @@ async function createOffer(req, res) {
 // Update an existing offer. Only send fields you want to change.
 // ==================================================================
 async function updateOffer(req, res) {
-  const {
+  let {
     id, name, description, discountValue,
     productId, categoryId,
     minOrderValue, maxDiscount,
     startDate, endDate, isActive,
-    offerType, appliesTo, code
+    offerType, appliesTo,
+    showAsBanner, showInAnnouncement
   } = req.body;
-  console.log({ route: "PUT /api/offers/update-offer", offerId: id, body: { name, description, discountValue, productId, categoryId, minOrderValue, maxDiscount, startDate, endDate, isActive, offerType, appliesTo, code }, status: "updating offer" });
+  let newImageUrl = req.file
+    ? await uploadToSupabase(req.file.buffer, req.file.mimetype, req.file.originalname, "offer")
+    : undefined;
+  console.log({ route: "PUT /api/offers/update-offer", offerId: id, body: { name, description, discountValue, productId, categoryId, minOrderValue, maxDiscount, startDate, endDate, isActive, offerType, appliesTo, showAsBanner, showInAnnouncement }, status: "updating offer" });
 
   if (!id) {
     console.log({ route: "PUT /api/offers/update-offer", status: 400, message: "id is required" });
     return res.status(400).json({ success: false, message: "id is required" });
   }
+
+  const asBool = (v) => v === true || v === "true";
 
   try {
     const existingRes = await db.query("SELECT * FROM offers WHERE id = $1", [id]);
@@ -291,26 +450,39 @@ async function updateOffer(req, res) {
       return res.status(400).json({ success: false, message: "Invalid appliesTo" });
     }
 
-    let upperCode = existing.code;
-    if (code !== undefined) {
-      if (code && String(code).trim()) {
-        upperCode = String(code).trim().toUpperCase();
-        const dup = await db.query("SELECT id FROM offers WHERE UPPER(code) = $1 AND id != $2", [upperCode, id]);
-        if (dup.rows.length > 0) {
-          return res.status(409).json({ success: false, message: "Offer code already exists" });
-        }
-      } else {
-        upperCode = null;
+    // Only store-wide offers may carry a minimum order value.
+    if (currentApplies !== "all" && minOrderValue !== undefined && Number(minOrderValue) > 0) {
+      return res.status(400).json({ success: false, message: "Minimum order value can only be set on store-wide offers" });
+    }
+
+    if (currentApplies === "all") {
+      const liveAllOffer = await db.query(
+        `SELECT id FROM offers
+         WHERE applies_to = 'all'
+           AND is_active = TRUE
+           AND (start_date IS NULL OR start_date <= NOW())
+           AND (end_date   IS NULL OR end_date   >= NOW())
+           AND id != $1`
+      , [id]);
+      const willBeLive = (isActive !== undefined ? isActive : existing.is_active) === true;
+      if (willBeLive && liveAllOffer.rows.length > 0) {
+        return res.status(409).json({ success: false, message: "A store-wide offer is already live. Deactivate or end it before activating another." });
       }
     }
 
     const finalName = name !== undefined ? name.trim() : existing.name;
     const finalDesc = description !== undefined ? (description || null) : existing.description;
-    const finalMinOrder = minOrderValue !== undefined ? minOrderValue : existing.min_order_value;
+    const finalMinOrder = currentApplies === "all"
+      ? (minOrderValue !== undefined ? minOrderValue : existing.min_order_value)
+      : 0;
     const finalMaxDiscount = maxDiscount !== undefined ? (maxDiscount || null) : existing.max_discount;
     const finalStartDate = startDate !== undefined ? (startDate || null) : existing.start_date;
     const finalEndDate = endDate !== undefined ? (endDate || null) : existing.end_date;
     const finalIsActive = isActive !== undefined ? isActive : existing.is_active;
+    const finalImageUrl = newImageUrl !== undefined ? newImageUrl : existing.image_url;
+
+    const finalShowAsBanner = showAsBanner !== undefined ? asBool(showAsBanner) : existing.show_as_banner;
+    const finalShowInAnnouncement = showInAnnouncement !== undefined ? asBool(showInAnnouncement) : existing.show_in_announcement;
 
     const result = await db.query(
       `UPDATE offers SET
@@ -326,9 +498,11 @@ async function updateOffer(req, res) {
          is_active       = $10,
          offer_type      = $11,
          applies_to      = $12,
-         code            = $13,
+         image_url       = $13,
+         show_as_banner  = $14,
+         show_in_announcement = $15,
          updated_at      = NOW()
-       WHERE id = $14
+       WHERE id = $16
        RETURNING *`,
       [
         finalName,
@@ -343,13 +517,110 @@ async function updateOffer(req, res) {
         finalIsActive,
         currentType,
         currentApplies,
-        upperCode,
+        finalImageUrl,
+        finalShowAsBanner,
+        finalShowInAnnouncement,
         id
       ]
     );
 
-    console.log({ route: "PUT /api/offers/update-offer", offerId: id, status: 200 });
-    return res.json({ success: true, message: "Offer updated", offer: formatOffer(result.rows[0]) });
+    const updatedOffer = result.rows[0];
+
+    // Post-update side effects
+    try {
+      let productName = null;
+      if (updatedOffer.applies_to === "product" && updatedOffer.product_id) {
+        const prodRes = await db.query("SELECT name_en FROM products WHERE id = $1", [updatedOffer.product_id]);
+        productName = prodRes.rows[0]?.name_en || null;
+      }
+      let categoryName = null;
+      if (updatedOffer.applies_to === "category" && updatedOffer.category_id) {
+        const catRes = await db.query("SELECT name_en FROM categories WHERE id = $1", [updatedOffer.category_id]);
+        categoryName = catRes.rows[0]?.name_en || null;
+      }
+
+      const textInfo = buildBannerText(updatedOffer, productName, categoryName);
+
+      // --- BANNER OVERLAY SYNC ---
+      const linkedBannerRes = await db.query("SELECT * FROM banners WHERE linked_offer_id = $1", [updatedOffer.id]);
+      const linkedBanner = linkedBannerRes.rows[0];
+
+      if (finalShowAsBanner) {
+        if (!linkedBanner) {
+          if (updatedOffer.image_url) {
+            const bannerRes = await db.query(
+              `INSERT INTO banners (title, subtitle, image_url, is_active, linked_offer_id)
+               VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+              [updatedOffer.name, updatedOffer.description, updatedOffer.image_url, updatedOffer.is_active, updatedOffer.id]
+            );
+            const newBannerId = bannerRes.rows[0].id;
+            await db.query(
+              `INSERT INTO btext (banner_id, heading, subtext, is_active)
+               VALUES ($1, $2, $3, $4)`,
+              [newBannerId, textInfo.heading, textInfo.subtext, updatedOffer.is_active]
+            );
+            console.log(`Auto-created banner ${newBannerId} on update for offer ${updatedOffer.id}`);
+          }
+        } else {
+          // If a linked banner already exists, update only the banner's image if a new image was uploaded this request.
+          if (newImageUrl) {
+            await db.query(
+              `UPDATE banners SET image_url = $1, updated_at = NOW() WHERE id = $2`,
+              [newImageUrl, linkedBanner.id]
+            );
+            console.log(`Updated image for linked banner ${linkedBanner.id} to ${newImageUrl}`);
+          }
+        }
+      } else {
+        // If showAsBanner is now false and a linked banner exists, delete that banner
+        if (linkedBanner) {
+          await db.query("DELETE FROM banners WHERE id = $1", [linkedBanner.id]);
+          if (linkedBanner.image_url && linkedBanner.image_url !== updatedOffer.image_url) {
+            await deleteFromSupabase(linkedBanner.image_url);
+          }
+          console.log(`Deleted linked banner ${linkedBanner.id} and cleaned up banner image from storage`);
+        }
+      }
+
+      // --- ANNOUNCEMENT SYNC ---
+      const ownerRes = await db.query("SELECT value FROM settings WHERE key = 'announcement_offer_owner'");
+      const currentOwner = ownerRes.rows[0]?.value || "";
+
+      const now = new Date();
+      const started = !updatedOffer.start_date || new Date(updatedOffer.start_date) <= now;
+      const notEnded = !updatedOffer.end_date || new Date(updatedOffer.end_date) >= now;
+      const isOfferLive = updatedOffer.is_active && started && notEnded;
+
+      if (!isOfferLive && String(currentOwner) === String(updatedOffer.id)) {
+        await updateSettingValue("announcementEnabled", "false");
+        await updateSettingValue("announcement_offer_owner", "");
+        console.log(`Disabled announcement because owner offer ${updatedOffer.id} is inactive or expired`);
+      } else if (finalShowInAnnouncement && isOfferLive) {
+        await updateSettingValue("announcementText", textInfo.announcement);
+        await updateSettingValue("announcementEnabled", "true");
+        await updateSettingValue("announcement_offer_owner", updatedOffer.id);
+        console.log(`Updated announcement for offer ${updatedOffer.id} to: ${textInfo.announcement}`);
+      } else if (!finalShowInAnnouncement && String(currentOwner) === String(updatedOffer.id)) {
+        await updateSettingValue("announcementEnabled", "false");
+        await updateSettingValue("announcement_offer_owner", "");
+        console.log(`Disabled announcement since flag showInAnnouncement was toggled false for owner offer ${updatedOffer.id}`);
+      }
+    } catch (sideError) {
+      console.error("Warning: post-update offer side effects failed:", sideError.message);
+    }
+
+    if (newImageUrl && existing.image_url && newImageUrl !== existing.image_url) {
+      await deleteFromSupabase(existing.image_url);
+    }
+
+    console.log({
+      route: "PUT /api/offers/update-offer",
+      offerId: id,
+      status: 200,
+      showAsBanner: finalShowAsBanner,
+      showInAnnouncement: finalShowInAnnouncement
+    });
+    return res.json({ success: true, message: "Offer updated", offer: formatOffer(updatedOffer) });
   } catch (err) {
     console.error({ route: "PUT /api/offers/update-offer", offerId: id, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
@@ -366,13 +637,27 @@ async function deleteOffer(req, res) {
     return res.status(400).json({ success: false, message: "id is required" });
   }
   try {
+    const ownerRes = await db.query("SELECT value FROM settings WHERE key = 'announcement_offer_owner'");
+    const currentOwner = ownerRes.rows[0]?.value || "";
+    if (String(currentOwner) === String(id)) {
+      await updateSettingValue("announcementEnabled", "false");
+      await updateSettingValue("announcement_offer_owner", "");
+      console.log(`Deactivating announcement since owning offer ${id} is being deleted`);
+    }
+
     const result = await db.query(
-      "DELETE FROM offers WHERE id = $1 RETURNING id", [id]
+      "DELETE FROM offers WHERE id = $1 RETURNING id, image_url", [id]
     );
     if (result.rows.length === 0) {
       console.log({ route: "DELETE /api/offers/delete-offer", offerId: id, status: 404, message: "Offer not found" });
       return res.status(404).json({ success: false, message: "Offer not found" });
     }
+
+    const deletedOffer = result.rows[0];
+    if (deletedOffer.image_url) {
+      await deleteFromSupabase(deletedOffer.image_url);
+    }
+
     console.log({ route: "DELETE /api/offers/delete-offer", offerId: id, status: 200 });
     return res.json({ success: true, message: "Offer deleted" });
   } catch (err) {
@@ -381,4 +666,8 @@ async function deleteOffer(req, res) {
   }
 }
 
-module.exports = { getActiveOffers, getAllOffers, getOfferById, createOffer, updateOffer, deleteOffer };
+module.exports = {
+  getActiveOffers, getActiveStoreWideOffer,
+  getAllOffers, getOfferById,
+  createOffer, updateOffer, deleteOffer
+};

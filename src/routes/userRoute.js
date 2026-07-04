@@ -10,6 +10,8 @@ const {
   getMyProfile,
   updateMyProfile,
   changeMyPassword,
+  deactivateMyAccount,
+  deleteMyAccount,
   getMyAddresses,
   addAddress,
   updateAddress,
@@ -22,6 +24,9 @@ const { isAdmin } = require("../middleware/auth.js");
 router.get("/me", authenticate, getMyProfile);
 router.put("/me/update", authenticate, updateMyProfile);
 router.put("/me/password", authenticate, changeMyPassword);
+
+router.post("/me/deactivate", authenticate, deactivateMyAccount);
+router.post("/me/delete", authenticate, deleteMyAccount);
 
 // Addresses
 router.get("/me/addresses", authenticate, getMyAddresses);

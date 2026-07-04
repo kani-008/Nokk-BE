@@ -1,6 +1,6 @@
 const express  = require("express");
 const router   = express.Router();
-const { getCart, addToCart, updateCartItem, removeCartItem, clearCart } = require("../controllers/cartController.js");
+const { getCart, addToCart, updateCartItem, removeCartItem, clearCart, updateComboQty, removeCombo } = require("../controllers/cartController.js");
 const authenticate = require("../middleware/auth.js");
 
 // Public log endpoint to print cart movements (for guests and logged-in users alike)
@@ -33,10 +33,12 @@ router.post("/log", (req, res) => {
 });
 
 router.use(authenticate); // all cart routes require login
-router.get   ("/get-cart",     getCart);
-router.post  ("/add-item",     addToCart);
-router.put   ("/update-item",  updateCartItem);   // itemId -> body
-router.delete("/remove-item",  removeCartItem);   // itemId -> body
-router.delete("/clear-cart",   clearCart);
+router.get   ("/get-cart",         getCart);
+router.post  ("/add-item",         addToCart);       // { variantId, quantity? } or { comboId, quantity? }
+router.put   ("/update-item",      updateCartItem);   // itemId -> body
+router.delete("/remove-item",      removeCartItem);   // itemId -> body
+router.put   ("/update-combo-qty", updateComboQty);   // comboId, quantity -> body
+router.delete("/remove-combo",     removeCombo);      // comboId -> body
+router.delete("/clear-cart",       clearCart);
 
 module.exports = router;

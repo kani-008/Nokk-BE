@@ -10,6 +10,7 @@ const {
   registerOtpCreate,
   refreshAccessToken,
   logout,
+  reactivate,
 } = require("../controllers/loginController.js");
 const { loginLimiter } = require("../middleware/ratelimiter.js");
 const authenticate = require("../middleware/auth.js");
@@ -23,5 +24,6 @@ router.post("/otp-create", loginLimiter, otpgenerate);
 router.post("/register-otp", loginLimiter, registerOtpCreate);
 router.post("/check-phone", loginLimiter, checkPhone);
 router.post("/logout", authenticate, logout);
+router.post("/reactivate", loginLimiter, reactivate);
 
 module.exports = router;

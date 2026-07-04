@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const {
   getActiveOffers,
+  getActiveStoreWideOffer,
   getAllOffers,
   getOfferById,
   createOffer,
@@ -10,9 +11,9 @@ const {
 } = require("../controllers/offersController.js");
 const authenticate = require("../middleware/auth.js");
 const { isAdmin } = require("../middleware/auth.js");
-
 // Public — live offers only
 router.get("/get-active", getActiveOffers);
+router.get("/active-storewide", getActiveStoreWideOffer);
 
 // Admin
 router.get("/get-all", authenticate, isAdmin, getAllOffers);

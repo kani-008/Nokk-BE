@@ -1,11 +1,10 @@
 const express = require("express");
 const router  = express.Router();
 const {
-  getAllProducts, getProductBySlug, getWeightLabels, getSimilarProducts,
+  getAllProducts, getProductBySlug, getWeightLabels, getSimilarProducts, getSimilarProductsMulti,
   createProduct, updateProduct, deleteProduct,
   addVariant, updateVariant, deleteVariant,
   addImage, addImages, deleteImage,
-  addReview, deleteReview,
 } = require("../controllers/productController.js");
 const { authenticate, isAdmin } = require("../middleware/auth.js");
 const { uploadProduct } = require("../controllers/uploadController.js");
@@ -18,9 +17,7 @@ router.get("/get-all",       getAllProducts);
 router.get("/get-by-slug",   getProductBySlug);
 router.get("/weight-labels", getWeightLabels);
 router.get("/similar",       getSimilarProducts);
-
-// Customer (login required)
-router.post("/add-review",  authenticate, addReview);
+router.get("/similar-multi", getSimilarProductsMulti);
 
 // Admin — product
 router.post  ("/create-product", authenticate, isAdmin, createProduct);
@@ -37,7 +34,7 @@ router.post  ("/add-image",    authenticate, isAdmin, productImageUpload,  addIm
 router.post  ("/add-images",   authenticate, isAdmin, productImagesUpload, addImages); // bulk, 3-5 typical
 router.delete("/delete-image", authenticate, isAdmin, deleteImage);
 
-// Admin — reviews
-router.delete("/delete-review", authenticate, isAdmin, deleteReview);
+// Review routes (add/update/delete-my/get-my/delete) now live in
+// reviewRoute.js, mounted separately at /api/products in server.js.
 
 module.exports = router;

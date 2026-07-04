@@ -1,4 +1,5 @@
 const db = require("../config/db.js");
+const { invalidateMaintenanceCache } = require("../middleware/maintenance.js");
 
 // settings schema: key TEXT PK, value TEXT NOT NULL, updated_at
 // Auto-cast value: "true"/"false" → boolean, numeric strings → number.
@@ -61,6 +62,9 @@ async function updateSettings(req, res) {
     }
 
     await client.query("COMMIT");
+
+    // Flush the in-process maintenance mode cache so changes take effect immediately
+    invalidateMaintenanceCache();
 
     // Return the full updated settings (can use pool — transaction is done)
     const result = await db.query(`SELECT key, value FROM settings ORDER BY key ASC`);

@@ -10,7 +10,6 @@ function formatCategory(c) {
     // Product card label rule: "English Name (Tamil Name)"
     label: c.name_ta ? `${c.name_en} (${c.name_ta})` : c.name_en,
     slug: c.slug,
-    description: c.description,
     imageUrl: c.image_url,
     sortOrder: c.sort_order,
     isActive: c.is_active,
@@ -110,11 +109,13 @@ async function createCategory(req, res) {
     }
 
     if (!nameEn || !slug) {
+      console.log({ route: "POST /api/categories", status: 400, message: "nameEn and slug are required" });
       return res.status(400).json({ success: false, message: "nameEn and slug are required" });
     }
 
     const dup = await db.query("SELECT id FROM categories WHERE slug = $1", [slug.trim()]);
     if (dup.rows.length > 0) {
+      console.log({ route: "POST /api/categories", status: 409, message: "A category with this slug already exists" });
       return res.status(409).json({ success: false, message: "A category with this slug already exists" });
     }
 
@@ -151,6 +152,7 @@ async function updateCategory(req, res) {
   try {
     const existing = await db.query("SELECT id, image_url FROM categories WHERE id = $1", [id]);
     if (existing.rows.length === 0) {
+      console.log({ route: "PUT /api/categories/update-category", categoryId: id, status: 404, message: "Category not found" });
       return res.status(404).json({ success: false, message: "Category not found" });
     }
     const oldImageUrl = existing.rows[0].image_url;
@@ -165,6 +167,7 @@ async function updateCategory(req, res) {
         [slug.trim(), id]
       );
       if (dup.rows.length > 0) {
+        console.log({ route: "PUT /api/categories/update-category", categoryId: id, status: 409, message: "Slug already used by another category" });
         return res.status(409).json({ success: false, message: "Slug already used by another category" });
       }
     }
@@ -218,6 +221,7 @@ async function deleteCategory(req, res) {
       [id]
     );
     if (parseInt(inUse.rows[0].c) > 0) {
+      console.log({ route: "DELETE /api/categories/delete-category", categoryId: id, status: 409, message: "Cannot delete — active products belong to this category" });
       return res.status(409).json({
         success: false,
         message: "Cannot delete — active products belong to this category. Deactivate them first."
@@ -227,6 +231,7 @@ async function deleteCategory(req, res) {
       "DELETE FROM categories WHERE id = $1 RETURNING image_url", [id]
     );
     if (result.rows.length === 0) {
+      console.log({ route: "DELETE /api/categories/delete-category", categoryId: id, status: 404, message: "Category not found" });
       return res.status(404).json({ success: false, message: "Category not found" });
     }
     await deleteFromSupabase(result.rows[0].image_url);
@@ -238,4 +243,25 @@ async function deleteCategory(req, res) {
   }
 }
 
-module.exports = { getAllCategories, getCategoryBySlug, createCategory, updateCategory, deleteCategory };
+async function adminGetAllCategories(req, res) {
+  console.log({ route: "GET /api/categories/admin-all", userId: req.user?.id, status: "fetching all categories for admin" });
+  try {
+    const result = await db.query(
+      `SELECT * FROM categories ORDER BY sort_order ASC, name_en ASC`
+    );
+    console.log({ route: "GET /api/categories/admin-all", userId: req.user?.id, status: 200, count: result.rows.length });
+    return res.json({ success: true, categories: result.rows.map(formatCategory) });
+  } catch (err) {
+    console.error({ route: "GET /api/categories/admin-all", error: err.message });
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+}
+
+module.exports = {
+  getAllCategories,
+  getCategoryBySlug,
+  createCategory,
+  updateCategory,
+  deleteCategory,
+  adminGetAllCategories
+};

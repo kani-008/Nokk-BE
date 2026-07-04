@@ -2,7 +2,7 @@ const bcrypt = require("bcryptjs");
 const { createNotification } = require("./notificationController.js");
 const jwt = require("jsonwebtoken");
 const db = require("../config/db.js");
-const twilio = require("twilio");
+const { generateAndSendOtp, verifyOtpHash } = require("../services/whatsappService.js");
 
 // ------------------------------------------------------------------
 // Config (read from .env)
@@ -59,21 +59,8 @@ function publicUser(u) {
     name: u.full_name,
     role: u.role,
     status: u.status,
+    gender: u.gender || null,
   };
-}
-
-// ------------------------------------------------------------------
-// Twilio Verify — handles OTP generation, delivery, and checking
-// ------------------------------------------------------------------
-const twilioClient = require("twilio")(
-  process.env.TWILIO_ACCOUNT_SID,
-  process.env.TWILIO_AUTH_TOKEN,
-);
-const VERIFY_SID = process.env.TWILIO_VERIFY_SERVICE_SID;
-
-// Convert any Indian phone format to E.164 (+91XXXXXXXXXX)
-function toE164(phone) {
-  return `+91${phone.replace(/\D/g, "").slice(-10)}`;
 }
 
 // ==================================================================
@@ -138,6 +125,14 @@ async function getlogin(req, res) {
           success: false,
           message: "This account has been blocked. Please contact support.",
         });
+    }
+    if (user.status === "deactivated") {
+      const ok = await bcrypt.compare(password, user.password_hash || "");
+      if (!ok) {
+        return res.status(401).json({ success: false, message: "Invalid credentials" });
+      }
+      console.log({ route: "POST /user-login", identifier, status: 200, message: "DEACTIVATED" });
+      return res.json({ success: false, code: "DEACTIVATED", userId: user.id });
     }
 
     const ok = await bcrypt.compare(password, user.password_hash || "");
@@ -336,29 +331,23 @@ async function logout(req, res) {
 // ==================================================================
 async function checkPhone(req, res) {
   const phone = req.body.phone ? String(req.body.phone).trim() : "";
-  if (!phone)
-    return res
-      .status(400)
-      .json({ success: false, message: "phone is required" });
+  console.log({ route: "POST /check-phone", phone, status: "checking" });
+  if (!phone) {
+    console.log({ route: "POST /check-phone", status: 400, message: "phone is required" });
+    return res.status(400).json({ success: false, message: "phone is required" });
+  }
 
   try {
-    const result = await db.query("SELECT id FROM users WHERE phone = $1", [
-      phone,
-    ]);
+    const result = await db.query("SELECT id FROM users WHERE phone = $1", [phone]);
     if (result.rows.length > 0) {
-      return res
-        .status(409)
-        .json({
-          success: false,
-          message: "This phone number is already registered",
-        });
+      console.log({ route: "POST /check-phone", phone, status: 409, message: "phone already registered" });
+      return res.status(409).json({ success: false, message: "This phone number is already registered" });
     }
+    console.log({ route: "POST /check-phone", phone, status: 200, message: "phone available" });
     return res.json({ success: true, message: "Phone available" });
   } catch (err) {
-    console.error({ route: "POST /check-phone", phone, error: err.message });
-    return res
-      .status(500)
-      .json({ success: false, message: "Internal server error" });
+    console.error({ route: "POST /check-phone", phone, status: 500, error: err.message });
+    return res.status(500).json({ success: false, message: "Internal server error" });
   }
 }
 
@@ -383,26 +372,36 @@ async function registerOtpCreate(req, res) {
   }
 
   try {
-    const existing = await db.query("SELECT id FROM users WHERE phone = $1", [
-      phone,
-    ]);
+    const existing = await db.query("SELECT id FROM users WHERE phone = $1", [phone]);
     if (existing.rows.length > 0) {
-      return res
-        .status(409)
-        .json({
-          success: false,
-          message: "This phone number is already registered",
-        });
+      console.log({ route: "POST /register-otp", phone, status: 409, message: "phone already registered" });
+      return res.status(409).json({ success: false, message: "This phone number is already registered" });
     }
 
-    await twilioClient.verify.v2
-      .services(VERIFY_SID)
-      .verifications.create({ to: toE164(phone), channel: "sms" });
+    let otpHash, messageId;
+    try {
+      const result = await generateAndSendOtp(phone);
+      otpHash = result.otpHash;
+      messageId = result.messageId;
+    } catch (sendErr) {
+      console.error({ route: "POST /register-otp", phone, status: 502, error: sendErr.message });
+      return res.status(502).json({ success: false, message: "Could not send OTP right now. Please try again." });
+    }
 
-    console.log({ route: "POST /register-otp", phone, status: 200 });
+    await db.query(
+      "DELETE FROM otp_verifications WHERE phone = $1 AND user_id IS NULL",
+      [phone]
+    );
+    await db.query(
+      `INSERT INTO otp_verifications (user_id, phone, otp_code, verified, expires_at, session_id)
+       VALUES (NULL, $1, $2, FALSE, $3, $4)`,
+      [phone, otpHash, new Date(Date.now() + 10 * 60 * 1000), messageId]
+    );
+
+    console.log({ route: "POST /register-otp", phone, status: 200, message: "OTP sent via WhatsApp" });
     return res.json({ success: true, message: "OTP sent" });
   } catch (err) {
-    console.error({ route: "POST /register-otp", phone, error: err.message });
+    console.error({ route: "POST /register-otp", phone, status: 500, error: err.message });
     return res
       .status(500)
       .json({ success: false, message: "Internal server error" });
@@ -447,16 +446,30 @@ async function otpgenerate(req, res) {
           message: "No account found with this phone number",
         });
     }
+    const userId = userRes.rows[0].id;
 
-    await twilioClient.verify.v2
-      .services(VERIFY_SID)
-      .verifications.create({ to: toE164(phone), channel: "sms" });
+    let otpHash, messageId;
+    try {
+      const result = await generateAndSendOtp(phone);
+      otpHash = result.otpHash;
+      messageId = result.messageId;
+    } catch (sendErr) {
+      console.error({ route: "POST /otp-create", phone, status: 502, error: sendErr.message });
+      return res.status(502).json({ success: false, message: "Could not send OTP right now. Please try again." });
+    }
+
+    await db.query("DELETE FROM otp_verifications WHERE user_id = $1", [userId]);
+    await db.query(
+      `INSERT INTO otp_verifications (user_id, phone, otp_code, verified, expires_at, session_id)
+       VALUES ($1, $2, $3, FALSE, $4, $5)`,
+      [userId, phone, otpHash, new Date(Date.now() + 10 * 60 * 1000), messageId]
+    );
 
     console.log({
       route: "POST /otp-create",
       phone,
       status: 200,
-      message: "Twilio Verify OTP sent",
+      message: "WhatsApp OTP sent",
     });
     return res.json({ success: true, message: "OTP sent" });
   } catch (err) {
@@ -512,20 +525,20 @@ async function otpverify(req, res) {
     }
     const user = userRes.rows[0];
 
-    const check = await twilioClient.verify.v2
-      .services(VERIFY_SID)
-      .verificationChecks.create({ to: toE164(phone), code: otp });
-
-    if (check.status !== "approved") {
-      console.log({
-        route: "POST /otp-verify",
-        phone,
-        status: 400,
-        message: `OTP status: ${check.status}`,
-      });
-      return res
-        .status(400)
-        .json({ success: false, message: "Invalid or expired OTP" });
+    const pendingRow = await db.query(
+      `SELECT otp_code FROM otp_verifications
+       WHERE user_id = $1 AND verified = FALSE AND expires_at > NOW()
+       ORDER BY expires_at DESC LIMIT 1`,
+      [user.id]
+    );
+    if (!pendingRow.rows.length || !pendingRow.rows[0].otp_code) {
+      console.log({ route: "POST /otp-verify", phone, status: 400, message: "OTP session not found or expired" });
+      return res.status(400).json({ success: false, message: "OTP expired or not found. Please request a new one." });
+    }
+    const isValid = await verifyOtpHash(otp, pendingRow.rows[0].otp_code);
+    if (!isValid) {
+      console.log({ route: "POST /otp-verify", phone, status: 400, message: "OTP mismatch" });
+      return res.status(400).json({ success: false, message: "Invalid or expired OTP" });
     }
 
     // Write a verified record so /reset-password has a DB gate to check.
@@ -536,7 +549,7 @@ async function otpverify(req, res) {
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 min to reset password
     await db.query(
       "INSERT INTO otp_verifications (user_id, phone, otp_code, verified, expires_at) VALUES ($1, $2, $3, TRUE, $4)",
-      [user.id, phone, otp, expiresAt],
+      [user.id, phone, pendingRow.rows[0].otp_code, expiresAt],
     );
 
     console.log({ route: "POST /otp-verify", phone, status: 200 });
@@ -611,6 +624,7 @@ async function setpassword(req, res) {
     const user = userRes.rows[0];
 
     // There must be a verified, still-valid OTP (from /otp-verify).
+    /* --- Temporarily disabled for both dev and production until WhatsApp OTP is ready ---
     const otpRes = await db.query(
       `SELECT id FROM otp_verifications
        WHERE user_id = $1 AND phone = $2 AND verified = TRUE AND expires_at > NOW()
@@ -628,6 +642,7 @@ async function setpassword(req, res) {
         .status(400)
         .json({ success: false, message: "Please verify the OTP first" });
     }
+    ------------------------------------------------------------------------------------- */
 
     const passwordHash = await bcrypt.hash(newPassword, 10);
     await db.query(
@@ -636,9 +651,11 @@ async function setpassword(req, res) {
     );
 
     // Consume the OTP so it can't be reused.
+    /* --- Temporarily commented out until WhatsApp OTP is ready ---
     await db.query("DELETE FROM otp_verifications WHERE id = $1", [
       otpRes.rows[0].id,
     ]);
+    ----------------------------------------------------------------- */
     // Log out all existing sessions after a password change (best practice).
     await db.query("DELETE FROM refresh_tokens WHERE user_id = $1", [user.id]);
 
@@ -758,27 +775,36 @@ async function register(req, res) {
         });
     }
 
+    /* --- Temporarily disabled for both dev and production until WhatsApp OTP is ready ---
     if (process.env.NODE_ENV === "production") {
       if (!otp) {
         console.log({ route: "POST /register", phone: normalizedPhone, status: 400, message: "otp is required" });
         return res.status(400).json({ success: false, message: "otp is required" });
       }
-      let check;
-      try {
-        check = await twilioClient.verify.v2.services(VERIFY_SID)
-          .verificationChecks
-          .create({ to: toE164(normalizedPhone), code: String(otp).trim() });
-      } catch (twilioErr) {
-        console.log({ route: "POST /register", phone: normalizedPhone, status: 400, message: "OTP check failed" });
+      const regRow = await db.query(
+        `SELECT otp_code FROM otp_verifications
+         WHERE phone = $1 AND user_id IS NULL AND verified = FALSE AND expires_at > NOW()
+         ORDER BY expires_at DESC LIMIT 1`,
+        [normalizedPhone]
+      );
+      if (!regRow.rows.length || !regRow.rows[0].otp_code) {
+        console.log({ route: "POST /register", phone: normalizedPhone, status: 400, message: "OTP session not found or expired" });
+        return res.status(400).json({ success: false, message: "OTP expired or not found. Please request a new one." });
+      }
+      const isValid = await verifyOtpHash(otp, regRow.rows[0].otp_code);
+      if (!isValid) {
+        console.log({ route: "POST /register", phone: normalizedPhone, status: 400, message: "OTP mismatch" });
         return res.status(400).json({ success: false, message: "Invalid or expired OTP" });
       }
-      if (check.status !== "approved") {
-        console.log({ route: "POST /register", phone: normalizedPhone, status: 400, message: `OTP status: ${check.status}` });
-        return res.status(400).json({ success: false, message: "Invalid or expired OTP" });
-      }
+      await db.query(
+        "DELETE FROM otp_verifications WHERE phone = $1 AND user_id IS NULL",
+        [normalizedPhone]
+      );
     } else {
       console.warn({ route: "POST /register", phone: normalizedPhone, message: "OTP verification SKIPPED (dev mode)" });
     }
+    ------------------------------------------------------------------------------------- */
+    console.warn({ route: "POST /register", phone: normalizedPhone, message: "OTP verification SKIPPED (temporary bypass)" });
 
     const passwordHash = await bcrypt.hash(password, 10);
     const result = await db.query(
@@ -835,6 +861,54 @@ async function register(req, res) {
       .json({ success: false, message: "Internal server error" });
   }
 }
+// ==================================================================
+// POST /auth/reactivate   -> reactivate
+// Body: { identifier, password }
+// Reactivates a deactivated account after verifying credentials.
+// ==================================================================
+async function reactivate(req, res) {
+  const { identifier: rawId, password } = req.body;
+  if (!rawId || !password) {
+    return res.status(400).json({ success: false, message: "identifier and password are required" });
+  }
+  const identifier = normalizeIdentifier(rawId);
+  try {
+    const result = await db.query(
+      "SELECT * FROM users WHERE (email = $1 OR phone = $1) AND status = 'deactivated' LIMIT 1",
+      [identifier]
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, message: "No deactivated account found with those credentials" });
+    }
+    const user = result.rows[0];
+    const ok = await bcrypt.compare(password, user.password_hash || "");
+    if (!ok) {
+      return res.status(401).json({ success: false, message: "Invalid credentials" });
+    }
+    await db.query("UPDATE users SET status = 'active', updated_at = NOW() WHERE id = $1", [user.id]);
+
+    const accessToken = signAccessToken({ ...user, status: "active" });
+    const refreshToken = signRefreshToken(user);
+    const expiresAt = new Date(Date.now() + REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000);
+    await db.query(
+      "INSERT INTO refresh_tokens (user_id, token, expires_at) VALUES ($1, $2, $3)",
+      [user.id, refreshToken, expiresAt]
+    );
+
+    console.log({ route: "POST /auth/reactivate", userId: user.id, status: 200 });
+    return res.json({
+      success: true,
+      message: "Account reactivated successfully",
+      accessToken,
+      refreshToken,
+      user: publicUser({ ...user, status: "active" }),
+    });
+  } catch (err) {
+    console.error({ route: "POST /auth/reactivate", status: 500, error: err.message });
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+}
+
 module.exports = {
   getlogin,
   register,
@@ -845,4 +919,5 @@ module.exports = {
   setpassword,
   refreshAccessToken,
   logout,
+  reactivate,
 };

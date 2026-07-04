@@ -2,11 +2,64 @@ const crypto = require("crypto");
 const db = require("../config/db.js");
 const { createNotification } = require("./notificationController.js");
 const { getRazorpayClient, RAZORPAY_KEY_ID } = require("../config/razorpay.js");
+const { OFFER_MATCH_LATERAL_SQL } = require("../config/offerMatching.js");
 
 // ------------------------------------------------------------------
 // Helpers
 // ------------------------------------------------------------------
 const num = (v) => parseFloat(v) || 0;
+
+// ------------------------------------------------------------------
+// resolveOfferAdjustedPrices — batched lookup of the single best-matching
+// live product/category offer for each product id, using the exact same
+// LATERAL-join predicate as v_products_with_price (OFFER_MATCH_LATERAL_SQL)
+// so the two can never silently diverge. Store-wide ("all") offers are
+// matched separately elsewhere — never returned here.
+//
+// productCategoryPairs: [{ productId, categoryId }]  (categoryId may be null)
+// Returns: Map<productId, { offerId, offerType, discountValue, maxDiscount } | null>
+// ------------------------------------------------------------------
+async function resolveOfferAdjustedPrices(client, productCategoryPairs) {
+  const map = new Map();
+  if (!productCategoryPairs.length) return map;
+
+  const productIds = productCategoryPairs.map((x) => x.productId);
+  const categoryIds = productCategoryPairs.map((x) => x.categoryId);
+
+  const result = await client.query(
+    `SELECT p.id AS product_id, ao.id AS offer_id, ao.offer_type, ao.discount_value, ao.max_discount
+     FROM UNNEST($1::uuid[], $2::uuid[]) AS p(id, category_id)
+     ${OFFER_MATCH_LATERAL_SQL}`,
+    [productIds, categoryIds]
+  );
+
+  result.rows.forEach((r) => {
+    map.set(r.product_id, r.offer_id ? {
+      offerId: r.offer_id,
+      offerType: r.offer_type,
+      discountValue: num(r.discount_value),
+      maxDiscount: r.max_discount != null ? num(r.max_discount) : null,
+    } : null);
+  });
+  return map;
+}
+
+// ------------------------------------------------------------------
+// applyOfferToPrice — same percentage/flat/max-discount math used by the
+// view's effective_min_price computation, applied to a resolved variant price.
+// ------------------------------------------------------------------
+function applyOfferToPrice(price, offer) {
+  if (!offer) return price;
+  if (offer.offerType === "percentage") {
+    const rawDiscount = (price * offer.discountValue) / 100;
+    const discount = offer.maxDiscount != null ? Math.min(rawDiscount, offer.maxDiscount) : rawDiscount;
+    return Math.max(price - discount, 0);
+  }
+  if (offer.offerType === "flat") {
+    return Math.max(price - offer.discountValue, 0);
+  }
+  return price;
+}
 
 function formatOrder(ord, items = [], timeline = []) {
   return {
@@ -33,6 +86,7 @@ function formatOrder(ord, items = [], timeline = []) {
     address: {
       addressLine1: ord.shipping_address_line1,
       addressLine2: ord.shipping_address_line2,
+      taluk: ord.shipping_taluk,
       city: ord.shipping_city,
       state: ord.shipping_state,
       pincode: ord.shipping_pincode
@@ -51,19 +105,33 @@ function formatItem(i) {
     weight: i.weight,
     price: num(i.price),
     quantity: parseInt(i.quantity),
-    total: num(i.price) * parseInt(i.quantity)
+    total: num(i.price) * parseInt(i.quantity),
+    imageUrl: i.primary_image || null,
+    slug: i.slug || null,
+    isReviewed: i.is_reviewed === true,
   };
 }
 
 // ------------------------------------------------------------------
-// Single order — used by detail endpoints and checkout response
+// Single order — used by detail endpoints and checkout response.
+//
+// reviewerUserId is OPTIONAL and must only be passed by customer-facing
+// "my orders" callers (e.g. getMyOrderById) — it left-joins product_reviews
+// scoped to that user so formatItem can flag isReviewed per item. Admin
+// order-detail callers must omit it so admin listings never get this join.
 // ------------------------------------------------------------------
-async function fetchItemsAndTimeline(orderId) {
+async function fetchItemsAndTimeline(orderId, reviewerUserId = null) {
   const [itemsRes, timelineRes] = await Promise.all([
     db.query(
-      `SELECT id, product_id, variant_id, name_en, name_ta, weight, price, quantity
-       FROM order_items WHERE order_id = $1`,
-      [orderId]
+      `SELECT oi.id, oi.product_id, oi.variant_id, oi.name_en, oi.name_ta, oi.weight, oi.price, oi.quantity,
+              pi.image_url AS primary_image, p.slug,
+              (pr.id IS NOT NULL) AS is_reviewed
+       FROM order_items oi
+       JOIN products p ON p.id = oi.product_id
+       LEFT JOIN product_images pi ON pi.product_id = oi.product_id AND pi.is_primary = TRUE
+       LEFT JOIN product_reviews pr ON pr.product_id = oi.product_id AND pr.user_id = $2
+       WHERE oi.order_id = $1`,
+      [orderId, reviewerUserId]
     ),
     db.query(
       `SELECT status, notes, created_at AS date
@@ -81,15 +149,25 @@ async function fetchItemsAndTimeline(orderId) {
 // Batch fetch — used by listing endpoints to eliminate N+1.
 // Fetches items + timelines for ALL orders in exactly 2 queries
 // regardless of how many orders are in the list.
+//
+// reviewerUserId is OPTIONAL and must only be passed by customer-facing
+// "my orders" callers (e.g. getMyOrders) — see fetchItemsAndTimeline above
+// for why admin listing callers must omit it.
 // ------------------------------------------------------------------
-async function fetchItemsAndTimelinesForOrders(orderIds) {
+async function fetchItemsAndTimelinesForOrders(orderIds, reviewerUserId = null) {
   if (!orderIds.length) return { itemsMap: {}, timelinesMap: {} };
 
   const [itemsRes, timelineRes] = await Promise.all([
     db.query(
-      `SELECT id, order_id, product_id, variant_id, name_en, name_ta, weight, price, quantity
-       FROM order_items WHERE order_id = ANY($1)`,
-      [orderIds]
+      `SELECT oi.id, oi.order_id, oi.product_id, oi.variant_id, oi.name_en, oi.name_ta, oi.weight, oi.price, oi.quantity,
+              pi.image_url AS primary_image, p.slug,
+              (pr.id IS NOT NULL) AS is_reviewed
+       FROM order_items oi
+       JOIN products p ON p.id = oi.product_id
+       LEFT JOIN product_images pi ON pi.product_id = oi.product_id AND pi.is_primary = TRUE
+       LEFT JOIN product_reviews pr ON pr.product_id = oi.product_id AND pr.user_id = $2
+       WHERE oi.order_id = ANY($1)`,
+      [orderIds, reviewerUserId]
     ),
     db.query(
       `SELECT order_id, status, notes, created_at AS date
@@ -131,15 +209,20 @@ async function generateOrderId(queryFn) {
 // _createOrderCore — shared internal order-creation logic.
 //
 // MUST be called inside an already-open transaction (BEGIN issued by caller).
-// Handles: variant locking, stock check, price/coupon/total recomputation,
-// INSERT orders + order_items + order_timelines, coupon usage increment,
-// cart clear. Does NOT commit — caller commits after this returns.
+// Handles: combo expansion, variant locking, stock check, offer/combo/coupon/
+// store-wide-offer/total recomputation, INSERT orders + order_items +
+// order_timelines, coupon usage increment, cart clear. Does NOT commit —
+// caller commits after this returns.
 //
 // Parameters:
 //   client              — pg transaction client
 //   userId              — authenticated user's UUID
 //   userEmail           — user's email (may be null)
-//   items               — array of { productId, weight, nameEn, nameTa, quantity }
+//   items               — array of EITHER
+//                           { productId, weight, nameEn, nameTa?, quantity }   (ordinary line)
+//                           { comboId, comboQty, nameEn? }                     (combo line — expanded
+//                             server-side from combo_items; the client's own claim about what's
+//                             inside a combo, or its price, is never trusted)
 //   address             — { fullName, phone, addressLine1, addressLine2?, city, state?, pincode }
 //   couponApplied       — coupon code string or null
 //   paymentMethod       — "cod" | "upi" | "razorpay_upi" | "razorpay_card" | ...
@@ -149,7 +232,8 @@ async function generateOrderId(queryFn) {
 //   razorpayPaymentId   — Razorpay payment ID (null for cod/upi)
 //   razorpaySignature   — HMAC signature (null for cod/upi)
 //
-// Returns: { orderId, serverTotal, serverSubtotal, serverDeliveryCharge, serverDiscount }
+// Returns: { orderId, serverTotal, serverSubtotal, serverDeliveryCharge,
+//            serverDiscount, comboDiscountTotal, storeWideOfferDiscount }
 // ------------------------------------------------------------------
 async function _createOrderCore(client, {
   userId, userEmail, items, address, couponApplied,
@@ -159,37 +243,177 @@ async function _createOrderCore(client, {
   const tag = `[_createOrderCore userId=${userId} method=${paymentMethod}]`;
   console.log(`${tag} START — items: ${items.length}, coupon: ${couponApplied || "none"}, paymentStatus: ${paymentStatus}`);
 
-  // Lock variants and validate stock
-  console.log(`${tag} STEP 1 — locking variants and checking stock`);
-  const resolvedVariants = [];
-  const resolvedPrices = [];
+  // ------------------------------------------------------------------
+  // STEP 1 — expand combo lines and resolve ordinary-item variant ids.
+  // Incoming `items` entries are either:
+  //   { productId, weight, nameEn, nameTa?, quantity }   — ordinary line
+  //   { comboId, comboQty, nameEn? }                      — combo line
+  // Combo lines are expanded server-side from combo_items — the client's
+  // own claim about what's inside a combo is never trusted; only comboId
+  // + comboQty are read from it. resolvedLines is the flat, order_items-
+  // shaped result (1 row per member for combo lines).
+  // ------------------------------------------------------------------
+  console.log(`${tag} STEP 1 — expanding combo lines / resolving variant ids`);
+  const resolvedLines = [];
+  const comboGroups = new Map(); // comboId -> { name, totalPrice }
+
   for (const item of items) {
-    const varRes = await client.query(
-      "SELECT id, stock_qty, price FROM product_variants WHERE product_id = $1 AND weight_label = $2 AND is_active = TRUE FOR UPDATE",
-      [item.productId, item.weight]
-    );
-    if (varRes.rows.length === 0) {
-      const e = new Error(`Variant not found: ${item.nameEn} (${item.weight})`);
-      console.log(`${tag} STEP 1 FAIL — variant not found: ${item.nameEn} (${item.weight})`);
-      e.status = 400; throw e;
+    if (item.comboId) {
+      const comboQty = parseInt(item.comboQty) || 0;
+      if (comboQty < 1) {
+        const e = new Error("Invalid combo quantity");
+        console.log(`${tag} STEP 1 FAIL — invalid comboQty for combo ${item.comboId}`);
+        e.status = 400; throw e;
+      }
+
+      const comboRes = await client.query(
+        `SELECT id, name, combo_price,
+                (is_active AND (start_date IS NULL OR start_date <= NOW()) AND (end_date IS NULL OR end_date >= NOW())) AS is_live
+         FROM combos WHERE id = $1`,
+        [item.comboId]
+      );
+      if (comboRes.rows.length === 0 || !comboRes.rows[0].is_live) {
+        const e = new Error(`This combo is no longer available. Please refresh your cart.`);
+        console.log(`${tag} STEP 1 FAIL — combo ${item.comboId} not found or not live`);
+        e.status = 400; throw e;
+      }
+      const combo = comboRes.rows[0];
+
+      const memberRes = await client.query(
+        `SELECT ci.product_id, ci.variant_id, ci.quantity, pv.weight_label, p.name_en, p.name_ta
+         FROM combo_items ci
+         JOIN product_variants pv ON pv.id = ci.variant_id
+         JOIN products p ON p.id = ci.product_id
+         WHERE ci.combo_id = $1`,
+        [item.comboId]
+      );
+      if (memberRes.rows.length === 0) {
+        const e = new Error(`"${combo.name}" has no items configured`);
+        console.log(`${tag} STEP 1 FAIL — combo ${item.comboId} has no combo_items`);
+        e.status = 400; throw e;
+      }
+
+      comboGroups.set(combo.id, { name: combo.name, totalPrice: parseFloat(combo.combo_price) * comboQty });
+      for (const m of memberRes.rows) {
+        resolvedLines.push({
+          productId: m.product_id,
+          variantId: m.variant_id,
+          weight: m.weight_label,
+          nameEn: m.name_en,
+          nameTa: m.name_ta,
+          quantity: m.quantity * comboQty,
+          comboId: combo.id,
+        });
+      }
+      console.log(`${tag} STEP 1 — combo "${combo.name}" x${comboQty} expanded to ${memberRes.rows.length} member row(s)`);
+    } else {
+      const varRes = await client.query(
+        `SELECT pv.id, p.category_id
+         FROM product_variants pv
+         JOIN products p ON p.id = pv.product_id
+         WHERE pv.product_id = $1 AND pv.weight_label = $2 AND pv.is_active = TRUE`,
+        [item.productId, item.weight]
+      );
+      if (varRes.rows.length === 0) {
+        const e = new Error(`Variant not found: ${item.nameEn} (${item.weight})`);
+        console.log(`${tag} STEP 1 FAIL — variant not found: ${item.nameEn} (${item.weight})`);
+        e.status = 400; throw e;
+      }
+      resolvedLines.push({
+        productId: item.productId,
+        variantId: varRes.rows[0].id,
+        categoryId: varRes.rows[0].category_id,
+        weight: item.weight,
+        nameEn: item.nameEn,
+        nameTa: item.nameTa || null,
+        quantity: item.quantity,
+        comboId: null,
+      });
     }
-    if (varRes.rows[0].stock_qty <= 0) {
-      const e = new Error(`Product variant ${item.nameEn} (${item.weight}) is out of stock`);
-      console.log(`${tag} STEP 1 FAIL — out of stock: ${item.nameEn} (${item.weight})`);
-      e.status = 400; throw e;
-    }
-    console.log(`${tag} STEP 1 — variant OK: ${item.nameEn} (${item.weight}) qty=${item.quantity} dbPrice=₹${varRes.rows[0].price}`);
-    resolvedVariants.push(varRes.rows[0].id);
-    resolvedPrices.push(parseFloat(varRes.rows[0].price));
   }
 
-  // Recompute subtotal from DB prices (client-sent prices are never trusted)
-  let serverSubtotal = 0;
-  for (let i = 0; i < items.length; i++) {
-    serverSubtotal += resolvedPrices[i] * items[i].quantity;
+  // Sort by variant_id before locking — closes a lock-ordering deadlock
+  // window that's more likely to actually trigger now that combos make
+  // concurrent purchases of the same popular bundle common.
+  resolvedLines.sort((a, b) => (a.variantId < b.variantId ? -1 : a.variantId > b.variantId ? 1 : 0));
+
+  console.log(`${tag} STEP 1b — locking variants (sorted) and checking stock`);
+  for (const line of resolvedLines) {
+    const lockRes = await client.query(
+      "SELECT id, stock_qty, price FROM product_variants WHERE id = $1 FOR UPDATE",
+      [line.variantId]
+    );
+    if (lockRes.rows.length === 0 || lockRes.rows[0].stock_qty <= 0) {
+      const msg = line.comboId
+        ? `"${line.nameEn}" in your combo is currently unavailable`
+        : `Product variant ${line.nameEn} (${line.weight}) is out of stock`;
+      const e = new Error(msg);
+      console.log(`${tag} STEP 1b FAIL — out of stock: ${line.nameEn} (${line.weight}) combo=${line.comboId || "none"}`);
+      e.status = 400; throw e;
+    }
+    line.rawPrice = parseFloat(lockRes.rows[0].price);
+    console.log(`${tag} STEP 1b — variant OK: ${line.nameEn} (${line.weight}) qty=${line.quantity} dbPrice=₹${line.rawPrice}`);
   }
+
+  // ------------------------------------------------------------------
+  // STEP 2 — apply product/category offers to non-combo lines (using the
+  // exact same offer-matching predicate as v_products_with_price, via
+  // OFFER_MATCH_LATERAL_SQL, so the two can never silently diverge).
+  // Combo member lines ignore their own product/category offers entirely —
+  // combo_price is an admin-authored all-in bundle price that always wins.
+  // ------------------------------------------------------------------
+  console.log(`${tag} STEP 2 — applying product/category offers to non-combo items`);
+  const nonComboLines = resolvedLines.filter((l) => !l.comboId);
+  const offerMap = await resolveOfferAdjustedPrices(
+    client,
+    nonComboLines.map((l) => ({ productId: l.productId, categoryId: l.categoryId }))
+  );
+  for (const line of nonComboLines) {
+    const offer = offerMap.get(line.productId);
+    line.finalPrice = parseFloat(applyOfferToPrice(line.rawPrice, offer).toFixed(2));
+    if (offer) {
+      console.log(`${tag} STEP 2 — offer applied to ${line.nameEn}: ₹${line.rawPrice} -> ₹${line.finalPrice} (offer ${offer.offerId})`);
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // STEP 2b — distribute each combo's fixed combo_price across its member
+  // rows (proportional to each member's individual price, remainder
+  // absorbed by the last row so the group's rows sum exactly to
+  // combo_price). Each row still records a real, derivable individual
+  // price for reporting; the gap between individual-priced total and
+  // combo_price accumulates into comboDiscountTotal (reporting only —
+  // NOT subtracted again from the total, since it's already baked into
+  // these distributed row prices).
+  // ------------------------------------------------------------------
+  console.log(`${tag} STEP 2b — distributing combo prices across member rows`);
+  let comboDiscountTotal = 0;
+  for (const [comboId, group] of comboGroups) {
+    const memberLines = resolvedLines.filter((l) => l.comboId === comboId);
+    const individualTotal = memberLines.reduce((s, l) => s + l.rawPrice * l.quantity, 0);
+    comboDiscountTotal += Math.max(individualTotal - group.totalPrice, 0);
+
+    let allocatedTotal = 0;
+    memberLines.forEach((l, idx) => {
+      const rowTotal = l.rawPrice * l.quantity;
+      if (idx < memberLines.length - 1) {
+        const shareTotal = parseFloat((rowTotal * (group.totalPrice / individualTotal)).toFixed(2));
+        allocatedTotal += shareTotal;
+        l.finalPrice = parseFloat((shareTotal / l.quantity).toFixed(2));
+      } else {
+        const remainderTotal = parseFloat((group.totalPrice - allocatedTotal).toFixed(2));
+        l.finalPrice = parseFloat((remainderTotal / l.quantity).toFixed(2));
+      }
+    });
+    console.log(`${tag} STEP 2b — combo "${group.name}": individualTotal=₹${individualTotal.toFixed(2)} comboPrice=₹${group.totalPrice} savings=₹${Math.max(individualTotal - group.totalPrice, 0).toFixed(2)}`);
+  }
+  comboDiscountTotal = parseFloat(comboDiscountTotal.toFixed(2));
+
+  // Recompute subtotal from the fully resolved (offer/combo-adjusted) line
+  // prices — client-sent prices are never trusted.
+  let serverSubtotal = resolvedLines.reduce((s, l) => s + l.finalPrice * l.quantity, 0);
   serverSubtotal = parseFloat(serverSubtotal.toFixed(2));
-  console.log(`${tag} STEP 2 — subtotal recomputed: ₹${serverSubtotal}`);
+  console.log(`${tag} STEP 2c — subtotal recomputed: ₹${serverSubtotal} (comboDiscountTotal=₹${comboDiscountTotal})`);
 
   // Fetch delivery settings
   const settingsRes = await client.query("SELECT key, value FROM settings");
@@ -202,7 +426,8 @@ async function _createOrderCore(client, {
     settings[r.key] = val;
   });
   const freeShippingThreshold = settings.freeShippingThreshold !== undefined ? Number(settings.freeShippingThreshold) : 499;
-  const flatDeliveryCharge    = settings.flatDeliveryCharge    !== undefined ? Number(settings.flatDeliveryCharge)    : 60;
+  // shippingCharge is the canonical key saved by the Settings page; flatDeliveryCharge is legacy
+  const flatDeliveryCharge    = Number(settings.shippingCharge ?? settings.flatDeliveryCharge ?? 60);
   const minOrderValue         = settings.minOrderValue         !== undefined ? Number(settings.minOrderValue)         : 0;
   console.log(`${tag} STEP 3 — delivery settings: freeShippingThreshold=₹${freeShippingThreshold}, flatDeliveryCharge=₹${flatDeliveryCharge}, minOrderValue=₹${minOrderValue}`);
 
@@ -210,6 +435,21 @@ async function _createOrderCore(client, {
   if (minOrderValue > 0 && serverSubtotal < minOrderValue) {
     console.log(`${tag} STEP 3 FAIL — subtotal ₹${serverSubtotal} below minOrderValue ₹${minOrderValue}`);
     const e = new Error(`Minimum order value of ₹${minOrderValue} required`);
+    e.status = 400; throw e;
+  }
+
+  // Enforce payment method enabled
+  const methodKey = {
+    cod: "codEnabled",
+    upi: "upiEnabled",
+    razorpay_upi: "upiEnabled",
+    razorpay: "cardEnabled",
+    razorpay_card: "cardEnabled",
+    razorpay_netbanking: "cardEnabled",
+  }[paymentMethod];
+  if (methodKey && settings[methodKey] === false) {
+    console.log(`${tag} STEP 3 FAIL — payment method "${paymentMethod}" is disabled`);
+    const e = new Error(`Payment method "${paymentMethod}" is currently unavailable`);
     e.status = 400; throw e;
   }
 
@@ -222,7 +462,7 @@ async function _createOrderCore(client, {
     console.log(`${tag} STEP 4 — validating coupon: ${couponApplied}`);
     const couponCode = String(couponApplied).trim().toUpperCase();
     const couponRes = await client.query(
-      "SELECT * FROM coupons WHERE code = $1 AND is_active = TRUE",
+      "SELECT * FROM coupons WHERE code = $1 AND is_active = TRUE FOR UPDATE",
       [couponCode]
     );
     if (couponRes.rows.length === 0) {
@@ -271,14 +511,49 @@ async function _createOrderCore(client, {
     console.log(`${tag} STEP 4 — no coupon applied`);
   }
 
+  // Store-wide automatic offer — checked against the post-offer/combo,
+  // pre-coupon subtotal (serverSubtotal), stacking on top of any coupon
+  // discount exactly as coupons and this automatic discount are both
+  // meant to apply independently.
+  console.log(`${tag} STEP 4b — checking for a live store-wide offer`);
+  let storeWideOfferDiscount = 0;
+  const storeWideRes = await client.query(
+    `SELECT * FROM offers
+     WHERE applies_to = 'all' AND is_active = TRUE
+       AND (start_date IS NULL OR start_date <= NOW())
+       AND (end_date   IS NULL OR end_date   >= NOW())
+     ORDER BY created_at DESC LIMIT 1`
+  );
+  if (storeWideRes.rows.length > 0) {
+    const sw = storeWideRes.rows[0];
+    const swMinOrder = parseFloat(sw.min_order_value) || 0;
+    if (serverSubtotal >= swMinOrder) {
+      let computed = 0;
+      if (sw.offer_type === "percentage") {
+        const raw = (serverSubtotal * parseFloat(sw.discount_value)) / 100;
+        computed = sw.max_discount != null ? Math.min(raw, parseFloat(sw.max_discount)) : raw;
+      } else if (sw.offer_type === "flat") {
+        computed = parseFloat(sw.discount_value);
+      }
+      storeWideOfferDiscount = parseFloat(Math.min(computed, serverSubtotal).toFixed(2));
+      console.log(`${tag} STEP 4b — store-wide offer "${sw.name}" applied: ₹${storeWideOfferDiscount}`);
+    } else {
+      console.log(`${tag} STEP 4b — store-wide offer "${sw.name}" live but subtotal ₹${serverSubtotal} below min ₹${swMinOrder}`);
+    }
+  } else {
+    console.log(`${tag} STEP 4b — no live store-wide offer`);
+  }
+
   // Recompute delivery charge
   let serverDeliveryCharge = serverSubtotal >= freeShippingThreshold ? 0 : flatDeliveryCharge;
   if (freeShippingCoupon) serverDeliveryCharge = 0;
   serverDeliveryCharge = parseFloat(serverDeliveryCharge.toFixed(2));
 
-  // Recompute total
-  const serverTotal = parseFloat((serverSubtotal - serverDiscount + serverDeliveryCharge).toFixed(2));
-  console.log(`${tag} STEP 5 — totals: subtotal=₹${serverSubtotal} discount=₹${serverDiscount} delivery=₹${serverDeliveryCharge} total=₹${serverTotal}`);
+  // Recompute total — comboDiscountTotal is NOT subtracted here, it's
+  // already baked into serverSubtotal via the distributed combo row prices
+  // (STEP 2b); it's written to orders.combo_discount purely for reporting.
+  const serverTotal = parseFloat((serverSubtotal - serverDiscount - storeWideOfferDiscount + serverDeliveryCharge).toFixed(2));
+  console.log(`${tag} STEP 5 — totals: subtotal=₹${serverSubtotal} discount=₹${serverDiscount} storeWideDiscount=₹${storeWideOfferDiscount} comboDiscount(reporting)=₹${comboDiscountTotal} delivery=₹${serverDeliveryCharge} total=₹${serverTotal}`);
 
   // Validate against expected total if provided (used by checkout to catch UI drift)
   if (expectedTotal !== null) {
@@ -301,34 +576,36 @@ async function _createOrderCore(client, {
        id, user_id, customer_name, customer_email, customer_phone,
        subtotal, delivery_charge, discount, coupon_applied, total,
        status, payment_method, payment_status,
-       shipping_address_line1, shipping_address_line2,
+       shipping_address_line1, shipping_address_line2, shipping_taluk,
        shipping_city, shipping_state, shipping_pincode,
-       razorpay_order_id, razorpay_payment_id, razorpay_signature
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending',$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`,
+       razorpay_order_id, razorpay_payment_id, razorpay_signature,
+       combo_discount, store_wide_discount
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending',$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)`,
     [
       orderId, userId,
       address.fullName, userEmail || null, address.phone,
       serverSubtotal, serverDeliveryCharge, serverDiscount,
       couponApplied ? String(couponApplied).trim().toUpperCase() : null, serverTotal,
       paymentMethod, paymentStatus,
-      addrLine1, address.addressLine2 || null,
+      addrLine1, address.addressLine2 || null, address.taluk || null,
       address.city, address.state || "Tamil Nadu", address.pincode,
       razorpayOrderId, razorpayPaymentId, razorpaySignature,
+      comboDiscountTotal, storeWideOfferDiscount,
     ]
   );
   console.log(`${tag} STEP 7 — order row inserted: ${orderId}`);
 
-  // Insert order items using server-fetched variant prices
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i];
+  // Insert order items using the fully resolved (offer/combo-adjusted) lines
+  for (const line of resolvedLines) {
     await client.query(
       `INSERT INTO order_items
-         (order_id, product_id, variant_id, name_en, name_ta, weight, price, quantity)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-      [orderId, item.productId, resolvedVariants[i], item.nameEn, item.nameTa || null,
-        item.weight, resolvedPrices[i], item.quantity]
+         (order_id, product_id, variant_id, name_en, name_ta, weight, price, quantity, combo_id, combo_name)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      [orderId, line.productId, line.variantId, line.nameEn, line.nameTa || null,
+        line.weight, line.finalPrice, line.quantity,
+        line.comboId, line.comboId ? comboGroups.get(line.comboId).name : null]
     );
-    console.log(`${tag} STEP 7 — order_item inserted: ${item.nameEn} (${item.weight}) x${item.quantity} @ ₹${resolvedPrices[i]}`);
+    console.log(`${tag} STEP 7 — order_item inserted: ${line.nameEn} (${line.weight}) x${line.quantity} @ ₹${line.finalPrice}${line.comboId ? ` [combo: ${comboGroups.get(line.comboId).name}]` : ""}`);
   }
 
   // Track coupon usage so max_uses limits actually work
@@ -337,7 +614,11 @@ async function _createOrderCore(client, {
       "INSERT INTO coupon_usages (coupon_id, user_id, order_id) VALUES ($1, $2, $3)",
       [appliedCouponId, userId, orderId]
     );
-    console.log(`${tag} STEP 8 — coupon usage tracked in coupon_usages: ${couponApplied}`);
+    await client.query(
+      "UPDATE coupons SET usage_count = usage_count + 1 WHERE id = $1",
+      [appliedCouponId]
+    );
+    console.log(`${tag} STEP 8 — coupon usage tracked in coupon_usages and usage_count incremented: ${couponApplied}`);
   }
 
   // Initial timeline entry
@@ -357,7 +638,7 @@ async function _createOrderCore(client, {
   }
 
   console.log(`${tag} DONE — orderId=${orderId} total=₹${serverTotal}`);
-  return { orderId, serverTotal, serverSubtotal, serverDeliveryCharge, serverDiscount };
+  return { orderId, serverTotal, serverSubtotal, serverDeliveryCharge, serverDiscount, comboDiscountTotal, storeWideOfferDiscount };
 }
 
 // ==================================================================
@@ -534,7 +815,7 @@ async function getMyOrders(req, res) {
     );
 
     const orderIds = result.rows.map(o => o.id);
-    const { itemsMap, timelinesMap } = await fetchItemsAndTimelinesForOrders(orderIds);
+    const { itemsMap, timelinesMap } = await fetchItemsAndTimelinesForOrders(orderIds, req.user.id);
     const orders = result.rows.map(ord =>
       formatOrder(ord, itemsMap[ord.id] || [], timelinesMap[ord.id] || [])
     );
@@ -570,7 +851,7 @@ async function getMyOrderById(req, res) {
       console.log({ route: "GET /api/orders/get-my-order", userId: req.user.id, orderId: id, status: 404, message: "Order not found" });
       return res.status(404).json({ success: false, message: "Order not found" });
     }
-    const { items, timeline } = await fetchItemsAndTimeline(id);
+    const { items, timeline } = await fetchItemsAndTimeline(id, req.user.id);
     console.log({ route: "GET /api/orders/get-my-order", userId: req.user.id, orderId: id, status: 200 });
     return res.json({ success: true, order: formatOrder(result.rows[0], items, timeline) });
   } catch (err) {
@@ -954,12 +1235,12 @@ async function adminUpdateReplacement(req, res) {
            id, user_id, customer_name, customer_email, customer_phone,
            subtotal, delivery_charge, discount, coupon_applied, total,
            status, payment_method, payment_status,
-           shipping_address_line1, shipping_address_line2,
+           shipping_address_line1, shipping_address_line2, shipping_taluk,
            shipping_city, shipping_state, shipping_pincode
-         ) VALUES ($1,$2,$3,$4,$5,0,0,0,NULL,0,'pending','replacement','paid',$6,$7,$8,$9,$10)`,
+         ) VALUES ($1,$2,$3,$4,$5,0,0,0,NULL,0,'pending','replacement','paid',$6,$7,$8,$9,$10,$11)`,
         [
           newOrderId, orig.user_id, orig.customer_name, orig.customer_email, orig.customer_phone,
-          orig.shipping_address_line1, orig.shipping_address_line2,
+          orig.shipping_address_line1, orig.shipping_address_line2, orig.shipping_taluk,
           orig.shipping_city, orig.shipping_state, orig.shipping_pincode
         ]
       );
@@ -1074,29 +1355,111 @@ async function createRazorpayOrder(req, res) {
   }
 
   try {
-    // Validate stock and collect server prices (read-only; re-validated at verify time)
-    console.log(`[RAZORPAY CREATE-ORDER] STEP 1 — checking stock and fetching prices`);
-    const resolvedPrices = [];
+    // Resolve items (combo expansion + offer-adjusted pricing) — read-only,
+    // mirrors _createOrderCore's STEP 1/1b/2/2b exactly (same helper
+    // functions) but without row locks, since this is only the pre-payment
+    // amount estimate; verifyRazorpayPayment → _createOrderCore re-validates
+    // everything for real (with locks) once payment is confirmed.
+    console.log(`[RAZORPAY CREATE-ORDER] STEP 1 — expanding combo lines / resolving variant ids`);
+    const resolvedLines = [];
+    const comboGroups = new Map();
+
     for (const item of items) {
-      const varRes = await db.query(
-        "SELECT stock_qty, price FROM product_variants WHERE product_id = $1 AND weight_label = $2 AND is_active = TRUE",
-        [item.productId, item.weight]
-      );
-      if (varRes.rows.length === 0) {
-        return res.status(400).json({ success: false, message: `Variant not found: ${item.nameEn} (${item.weight})` });
+      if (item.comboId) {
+        const comboQty = parseInt(item.comboQty) || 0;
+        if (comboQty < 1) {
+          return res.status(400).json({ success: false, message: "Invalid combo quantity" });
+        }
+        const comboRes = await db.query(
+          `SELECT id, name, combo_price,
+                  (is_active AND (start_date IS NULL OR start_date <= NOW()) AND (end_date IS NULL OR end_date >= NOW())) AS is_live
+           FROM combos WHERE id = $1`,
+          [item.comboId]
+        );
+        if (comboRes.rows.length === 0 || !comboRes.rows[0].is_live) {
+          return res.status(400).json({ success: false, message: "This combo is no longer available. Please refresh your cart." });
+        }
+        const combo = comboRes.rows[0];
+        const memberRes = await db.query(
+          `SELECT ci.product_id, ci.variant_id, ci.quantity, pv.weight_label, pv.stock_qty, pv.price, p.name_en, p.name_ta
+           FROM combo_items ci
+           JOIN product_variants pv ON pv.id = ci.variant_id
+           JOIN products p ON p.id = ci.product_id
+           WHERE ci.combo_id = $1`,
+          [item.comboId]
+        );
+        if (memberRes.rows.length === 0) {
+          return res.status(400).json({ success: false, message: `"${combo.name}" has no items configured` });
+        }
+        for (const m of memberRes.rows) {
+          if (m.stock_qty <= 0) {
+            return res.status(400).json({ success: false, message: `"${m.name_en}" in your combo is currently unavailable` });
+          }
+        }
+        comboGroups.set(combo.id, { name: combo.name, totalPrice: parseFloat(combo.combo_price) * comboQty });
+        for (const m of memberRes.rows) {
+          resolvedLines.push({
+            productId: m.product_id, variantId: m.variant_id, weight: m.weight_label,
+            nameEn: m.name_en, nameTa: m.name_ta, quantity: m.quantity * comboQty,
+            comboId: combo.id, rawPrice: parseFloat(m.price),
+          });
+        }
+      } else {
+        const varRes = await db.query(
+          `SELECT pv.id, pv.stock_qty, pv.price, p.category_id
+           FROM product_variants pv JOIN products p ON p.id = pv.product_id
+           WHERE pv.product_id = $1 AND pv.weight_label = $2 AND pv.is_active = TRUE`,
+          [item.productId, item.weight]
+        );
+        if (varRes.rows.length === 0) {
+          return res.status(400).json({ success: false, message: `Variant not found: ${item.nameEn} (${item.weight})` });
+        }
+        if (varRes.rows[0].stock_qty <= 0) {
+          return res.status(400).json({ success: false, message: `${item.nameEn} (${item.weight}) is out of stock` });
+        }
+        resolvedLines.push({
+          productId: item.productId, variantId: varRes.rows[0].id, categoryId: varRes.rows[0].category_id,
+          weight: item.weight, nameEn: item.nameEn, nameTa: item.nameTa || null,
+          quantity: item.quantity, comboId: null, rawPrice: parseFloat(varRes.rows[0].price),
+        });
       }
-      if (varRes.rows[0].stock_qty <= 0) {
-        return res.status(400).json({ success: false, message: `${item.nameEn} (${item.weight}) is out of stock` });
-      }
-      resolvedPrices.push(parseFloat(varRes.rows[0].price));
     }
 
-    // Compute subtotal
-    let serverSubtotal = 0;
-    for (let i = 0; i < items.length; i++) {
-      serverSubtotal += resolvedPrices[i] * items[i].quantity;
+    console.log(`[RAZORPAY CREATE-ORDER] STEP 2 — applying product/category offers to non-combo items`);
+    const nonComboLines = resolvedLines.filter((l) => !l.comboId);
+    const offerMap = await resolveOfferAdjustedPrices(
+      db, nonComboLines.map((l) => ({ productId: l.productId, categoryId: l.categoryId }))
+    );
+    for (const line of nonComboLines) {
+      const offer = offerMap.get(line.productId);
+      line.finalPrice = parseFloat(applyOfferToPrice(line.rawPrice, offer).toFixed(2));
     }
+
+    console.log(`[RAZORPAY CREATE-ORDER] STEP 2b — distributing combo prices across member rows`);
+    let comboDiscountTotal = 0;
+    for (const [comboId, group] of comboGroups) {
+      const memberLines = resolvedLines.filter((l) => l.comboId === comboId);
+      const individualTotal = memberLines.reduce((s, l) => s + l.rawPrice * l.quantity, 0);
+      comboDiscountTotal += Math.max(individualTotal - group.totalPrice, 0);
+      let allocatedTotal = 0;
+      memberLines.forEach((l, idx) => {
+        const rowTotal = l.rawPrice * l.quantity;
+        if (idx < memberLines.length - 1) {
+          const shareTotal = parseFloat((rowTotal * (group.totalPrice / individualTotal)).toFixed(2));
+          allocatedTotal += shareTotal;
+          l.finalPrice = parseFloat((shareTotal / l.quantity).toFixed(2));
+        } else {
+          const remainderTotal = parseFloat((group.totalPrice - allocatedTotal).toFixed(2));
+          l.finalPrice = parseFloat((remainderTotal / l.quantity).toFixed(2));
+        }
+      });
+    }
+    comboDiscountTotal = parseFloat(comboDiscountTotal.toFixed(2));
+
+    // Compute subtotal
+    let serverSubtotal = resolvedLines.reduce((s, l) => s + l.finalPrice * l.quantity, 0);
     serverSubtotal = parseFloat(serverSubtotal.toFixed(2));
+    console.log(`[RAZORPAY CREATE-ORDER] STEP 2c — subtotal recomputed: ₹${serverSubtotal} (comboDiscountTotal=₹${comboDiscountTotal})`);
 
     // Fetch delivery settings
     const settingsRes = await db.query("SELECT key, value FROM settings");
@@ -1129,6 +1492,16 @@ async function createRazorpayOrder(req, res) {
       if (c.max_uses !== null && parseInt(c.usage_count) >= c.max_uses) {
         return res.status(400).json({ success: false, message: "Coupon usage limit reached" });
       }
+      if (c.max_uses_per_user !== null) {
+        const userUsageRes = await db.query(
+          "SELECT COUNT(*) AS count FROM coupon_usages WHERE coupon_id = $1 AND user_id = $2",
+          [c.id, userId]
+        );
+        const userUsageCount = parseInt(userUsageRes.rows[0].count) || 0;
+        if (userUsageCount >= c.max_uses_per_user) {
+          return res.status(400).json({ success: false, message: "You have reached your personal usage limit for this coupon" });
+        }
+      }
       if (serverSubtotal < parseFloat(c.min_order)) {
         return res.status(400).json({ success: false, message: `Minimum order of ₹${c.min_order} required for this coupon` });
       }
@@ -1145,11 +1518,35 @@ async function createRazorpayOrder(req, res) {
       }
     }
 
+    // Store-wide automatic offer — same rule as _createOrderCore's STEP 4b
+    let storeWideOfferDiscount = 0;
+    const storeWideRes = await db.query(
+      `SELECT * FROM offers
+       WHERE applies_to = 'all' AND is_active = TRUE
+         AND (start_date IS NULL OR start_date <= NOW())
+         AND (end_date   IS NULL OR end_date   >= NOW())
+       ORDER BY created_at DESC LIMIT 1`
+    );
+    if (storeWideRes.rows.length > 0) {
+      const sw = storeWideRes.rows[0];
+      const swMinOrder = parseFloat(sw.min_order_value) || 0;
+      if (serverSubtotal >= swMinOrder) {
+        let computed = 0;
+        if (sw.offer_type === "percentage") {
+          const raw = (serverSubtotal * parseFloat(sw.discount_value)) / 100;
+          computed = sw.max_discount != null ? Math.min(raw, parseFloat(sw.max_discount)) : raw;
+        } else if (sw.offer_type === "flat") {
+          computed = parseFloat(sw.discount_value);
+        }
+        storeWideOfferDiscount = parseFloat(Math.min(computed, serverSubtotal).toFixed(2));
+      }
+    }
+
     let serverDeliveryCharge = serverSubtotal >= freeShippingThreshold ? 0 : flatDeliveryCharge;
     if (freeShippingCoupon) serverDeliveryCharge = 0;
     serverDeliveryCharge = parseFloat(serverDeliveryCharge.toFixed(2));
-    const serverTotal = parseFloat((serverSubtotal - serverDiscount + serverDeliveryCharge).toFixed(2));
-    console.log(`[RAZORPAY CREATE-ORDER] STEP 5 — totals: subtotal=₹${serverSubtotal} discount=₹${serverDiscount} delivery=₹${serverDeliveryCharge} total=₹${serverTotal}`);
+    const serverTotal = parseFloat((serverSubtotal - serverDiscount - storeWideOfferDiscount + serverDeliveryCharge).toFixed(2));
+    console.log(`[RAZORPAY CREATE-ORDER] STEP 5 — totals: subtotal=₹${serverSubtotal} discount=₹${serverDiscount} storeWideDiscount=₹${storeWideOfferDiscount} comboDiscount(reporting)=₹${comboDiscountTotal} delivery=₹${serverDeliveryCharge} total=₹${serverTotal}`);
 
     // Create Razorpay order (amount in paise)
     console.log(`[RAZORPAY CREATE-ORDER] STEP 6 — calling Razorpay orders.create amount=${Math.round(serverTotal * 100)} paise`);
@@ -1372,6 +1769,19 @@ async function verifyRazorpayPayment(req, res) {
     });
   } catch (err) {
     await client.query("ROLLBACK");
+
+    // Attempt automatic refund since payment succeeded but order creation failed
+    try {
+      console.log(`[RAZORPAY VERIFY] Attempting automatic refund for paymentId=${razorpay_payment_id} due to verification error: ${err.message}`);
+      await getRazorpayClient().payments.refund(razorpay_payment_id);
+      console.log(`[RAZORPAY VERIFY] Refund successful for paymentId=${razorpay_payment_id}`);
+    } catch (refundErr) {
+      console.error(`[RAZORPAY VERIFY] Refund failed for paymentId=${razorpay_payment_id}:`, refundErr.message);
+    }
+
+    // Clean up pending record so webhook fallback doesn't trigger
+    await db.query("DELETE FROM pending_razorpay_orders WHERE razorpay_order_id = $1", [razorpay_order_id]).catch(() => {});
+
     if (err.status) {
       console.log(`[RAZORPAY VERIFY] ${err.status} ERROR — ${err.message} userId=${userId}`);
       console.log("=".repeat(60));
@@ -1530,6 +1940,23 @@ async function handleRazorpayWebhook(req, res) {
   } catch (err) {
     await client.query("ROLLBACK");
     console.error({ route: "Razorpay Webhook", event: "payment.captured", error: err.message, rpOrderId });
+
+    if (err.status === 400) {
+      // Permanent validation failure — initiate refund and return 200 (done/no retry needed)
+      try {
+        console.log(`[Razorpay Webhook] Permanent validation failure (status=400): ${err.message}. Initiating refund for paymentId=${rpPaymentId}`);
+        await getRazorpayClient().payments.refund(rpPaymentId);
+        console.log(`[Razorpay Webhook] Refund successful for paymentId=${rpPaymentId}`);
+        // Delete pending record so it doesn't process again
+        await db.query("DELETE FROM pending_razorpay_orders WHERE razorpay_order_id = $1", [rpOrderId]).catch(() => {});
+        return res.status(200).json({ success: true, message: `Validation failed: ${err.message}. Payment refunded.` });
+      } catch (refundErr) {
+        console.error(`[Razorpay Webhook] Refund failed for paymentId=${rpPaymentId}:`, refundErr.message);
+        // Return 500 so Razorpay retries, giving us another chance to refund or alert admin
+        return res.status(500).json({ success: false, message: `Validation failed but refund failed: ${refundErr.message}` });
+      }
+    }
+
     // Return 500 so Razorpay retries on transient errors
     return res.status(500).json({ success: false });
   } finally {

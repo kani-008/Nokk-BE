@@ -16,7 +16,9 @@ function formatBanner(b) {
     videoUrl: toPublicUrl(b.video_url),
     isActive: b.is_active,
     createdAt: b.created_at,
-    updatedAt: b.updated_at
+    updatedAt: b.updated_at,
+    linkedOfferId: b.linked_offer_id || null,
+    offerName: b.offer_name || null
   };
 }
 
@@ -27,7 +29,19 @@ async function getBanners(req, res) {
   console.log({ route: "GET /api/banners/get-banners", status: "fetching active banners" });
   try {
     const result = await db.query(
-      `SELECT * FROM banners WHERE is_active = TRUE ORDER BY id ASC`
+      `SELECT b.*
+       FROM banners b
+       LEFT JOIN offers o ON o.id = b.linked_offer_id
+       WHERE b.is_active = TRUE
+         AND (
+           b.linked_offer_id IS NULL
+           OR (
+             o.is_active = TRUE
+             AND (o.start_date IS NULL OR o.start_date <= NOW())
+             AND (o.end_date IS NULL OR o.end_date >= NOW())
+           )
+         )
+       ORDER BY b.id ASC`
     );
     return res.status(200).json({ success: true, banners: result.rows.map(formatBanner) });
   } catch (err) {
@@ -42,7 +56,12 @@ async function getBanners(req, res) {
 async function getAllBanners(req, res) {
   console.log({ route: "GET /api/banners/get-all", status: "fetching all banners" });
   try {
-    const result = await db.query(`SELECT * FROM banners ORDER BY id ASC`);
+    const result = await db.query(
+      `SELECT b.*, o.name AS offer_name
+       FROM banners b
+       LEFT JOIN offers o ON o.id = b.linked_offer_id
+       ORDER BY b.id ASC`
+    );
     if (result.rows.length === 0) {
       return res.status(404).json({ success: false, message: "No banners found" });
     }

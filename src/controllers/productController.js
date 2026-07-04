@@ -1,5 +1,6 @@
 const db = require("../config/db.js");
 const { uploadToSupabase, deleteFromSupabase } = require("../config/supabase.js");
+const { fetchReviewsForProduct } = require("./reviewController.js");
 
 // ------------------------------------------------------------------
 // Helpers
@@ -38,6 +39,21 @@ function formatProduct(p, variants = [], images = [], reviews = []) {
     primaryImage: p.primary_image || (images.find(i => i.isPrimary)?.imageUrl) || null,
     createdAt: p.created_at,
     updatedAt: p.updated_at,
+    // Sourced from v_products_with_price when the row came from that view
+    // (getAllProducts/getProductBySlug/getSimilarProducts); absent (→ null/
+    // minPrice) on rows sourced from a plain `products` query, e.g.
+    // createProduct/updateProduct's own INSERT/UPDATE ... RETURNING.
+    activeOffer: p.active_offer_id
+      ? {
+          id: p.active_offer_id,
+          type: p.active_offer_type,
+          discountValue: num(p.active_offer_discount_value),
+          maxDiscount: p.active_offer_max_discount != null ? num(p.active_offer_max_discount) : null,
+        }
+      : null,
+    effectivePrice: p.effective_min_price != null
+      ? num(p.effective_min_price)
+      : num(p.min_price ?? (variants.length ? Math.min(...variants.map(v => v.price)) : Infinity)),
     variants,
     images,
     reviews
@@ -74,24 +90,9 @@ function formatImage(i) {
   };
 }
 
-function formatReview(r) {
-  return {
-    id: r.id,
-    productId: r.product_id,
-    userId: r.user_id,
-    userName: r.full_name || null,
-    rating: r.rating,
-    title: r.title,
-    comment: r.comment,
-    isApproved: r.is_approved,
-    isVerified: r.is_verified,
-    createdAt: r.created_at
-  };
-}
-
 async function fetchVariantsImagesReviews(productId) {
   try {
-    const [varRes, imgRes, revRes] = await Promise.all([
+    const [varRes, imgRes, reviews] = await Promise.all([
       db.query(
         `SELECT * FROM product_variants WHERE product_id = $1 ORDER BY weight_grams ASC`,
         [productId]
@@ -108,23 +109,17 @@ async function fetchVariantsImagesReviews(productId) {
         dbErr.status = 500;
         throw dbErr;
       }),
-      db.query(
-        `SELECT pr.*, u.full_name
-         FROM product_reviews pr
-         LEFT JOIN users u ON u.id = pr.user_id
-         WHERE pr.product_id = $1 AND pr.is_approved = TRUE
-         ORDER BY pr.created_at DESC`,
-        [productId]
-      ).catch(err => {
+      fetchReviewsForProduct(productId).catch(err => {
         const dbErr = new Error(`Database error fetching reviews for product ${productId}: ${err.message}`);
         dbErr.status = 500;
         throw dbErr;
       })
     ]);
+
     return {
       variants: varRes.rows.map(formatVariant),
       images: imgRes.rows.map(formatImage),
-      reviews: revRes.rows.map(formatReview)
+      reviews
     };
   } catch (err) {
     console.error(`[fetchVariantsImagesReviews] error: ${err.message}`);
@@ -169,8 +164,12 @@ async function getAllProducts(req, res) {
   const sortMap = {
     "popular":        "v.avg_rating DESC, v.review_count DESC",
     "newest":         "v.created_at DESC",
-    "price-low-high": "v.min_price ASC",
-    "price-high-low": "v.min_price DESC"
+    "price-low-high": weightLabels && weightLabels.length > 0
+      ? "(SELECT MIN(pv.price) FROM product_variants pv WHERE pv.product_id = v.id AND pv.is_active = TRUE AND pv.weight_label = ANY($10)) ASC"
+      : "v.min_price ASC",
+    "price-high-low": weightLabels && weightLabels.length > 0
+      ? "(SELECT MIN(pv.price) FROM product_variants pv WHERE pv.product_id = v.id AND pv.is_active = TRUE AND pv.weight_label = ANY($10)) DESC"
+      : "v.min_price DESC"
   };
   const orderBy = sortMap[req.query.sort] || "v.avg_rating DESC, v.review_count DESC";
 
@@ -202,7 +201,7 @@ async function getAllProducts(req, res) {
     AND ($6::numeric IS NULL OR v.min_price >= $6)
     AND ($7::numeric IS NULL OR v.min_price <= $7)
     AND ($8::numeric IS NULL OR v.avg_rating >= $8)
-    AND (NOT $9 OR EXISTS (
+    AND (NOT $9 OR v.active_offer_id IS NOT NULL OR EXISTS (
           SELECT 1 FROM product_variants pv
           WHERE pv.product_id = v.id
             AND pv.is_active = TRUE
@@ -983,76 +982,6 @@ async function deleteImage(req, res) {
 }
 
 // ==================================================================
-// CUSTOMER — POST /api/products/:id/reviews   (login required)
-// Submit a review. One review per product per user.
-// ==================================================================
-async function addReview(req, res) {
-  const { productId: id, rating, title, comment } = req.body;
-  console.log({ route: "POST /api/products/add-review", productId: id, userId: req.user.id, body: { rating, title }, status: "submitting review" });
-
-  if (!rating || rating < 1 || rating > 5) {
-    console.log({ route: "POST /api/products/add-review", productId: id, userId: req.user.id, status: 400, message: "invalid rating" });
-    return res.status(400).json({ success: false, message: "rating must be between 1 and 5" });
-  }
-  try {
-    // Duplicate check
-    const dup = await db.query(
-      "SELECT id FROM product_reviews WHERE product_id = $1 AND user_id = $2",
-      [id, req.user.id]
-    );
-    if (dup.rows.length > 0) {
-      console.log({ route: "POST /api/products/add-review", productId: id, userId: req.user.id, status: 409, message: "already reviewed" });
-      return res.status(409).json({ success: false, message: "You have already reviewed this product" });
-    }
-    // Check if verified purchase
-    const purchase = await db.query(
-      `SELECT oi.id FROM order_items oi
-       JOIN orders o ON o.id = oi.order_id
-       WHERE oi.product_id = $1 AND o.user_id = $2 AND o.status = 'delivered'
-       LIMIT 1`,
-      [id, req.user.id]
-    );
-    const isVerified = purchase.rows.length > 0;
-
-    const result = await db.query(
-      `INSERT INTO product_reviews
-         (product_id, user_id, rating, title, comment, is_approved, is_verified)
-       VALUES ($1,$2,$3,$4,$5,TRUE,$6)
-       RETURNING *`,
-      [id, req.user.id, rating, title || null, comment || null, isVerified]
-    );
-    console.log({ route: "POST /api/products/add-review", productId: id, userId: req.user.id, status: 201, reviewId: result.rows[0].id });
-    return res.status(201).json({ success: true, message: "Review submitted", review: formatReview(result.rows[0]) });
-  } catch (err) {
-    console.error({ route: "POST /api/products/add-review", productId: id, userId: req.user.id, status: 500, error: err.message });
-    return res.status(500).json({ success: false, message: "Internal server error" });
-  }
-}
-
-// ==================================================================
-// ADMIN — DELETE /api/products/:id/reviews/:reviewId
-// ==================================================================
-async function deleteReview(req, res) {
-  const { productId: id, reviewId } = req.body;
-  console.log({ route: "DELETE /api/products/delete-review", productId: id, reviewId, status: "deleting review" });
-  try {
-    const result = await db.query(
-      "DELETE FROM product_reviews WHERE id = $1 AND product_id = $2 RETURNING id",
-      [reviewId, id]
-    );
-    if (result.rows.length === 0) {
-      console.log({ route: "DELETE /api/products/delete-review", productId: id, reviewId, status: 404, message: "Review not found" });
-      return res.status(404).json({ success: false, message: "Review not found" });
-    }
-    console.log({ route: "DELETE /api/products/delete-review", productId: id, reviewId, status: 200 });
-    return res.json({ success: true, message: "Review deleted" });
-  } catch (err) {
-    console.error({ route: "DELETE /api/products/delete-review", productId: id, reviewId, status: 500, error: err.message });
-    return res.status(500).json({ success: false, message: "Internal server error" });
-  }
-}
-
-// ==================================================================
 // PUBLIC — GET /api/products/similar?productId=&limit=
 // Returns products in the same category, excluding the given product.
 // ==================================================================
@@ -1109,10 +1038,85 @@ async function getSimilarProducts(req, res) {
   }
 }
 
+// PUBLIC — GET /api/products/similar-multi?productIds=&limit=
+// Returns similar products matching any categories of the listed productIds.
+async function getSimilarProductsMulti(req, res) {
+  const { productIds, limit = 8 } = req.query;
+  if (!productIds) return res.status(400).json({ success: false, message: "productIds query param is required" });
+  
+  const parsedIds = productIds.split(",").map(id => id.trim()).filter(Boolean);
+  if (parsedIds.length === 0) return res.status(400).json({ success: false, message: "Invalid productIds query param" });
+
+  try {
+    const catRes = await db.query(
+      "SELECT DISTINCT category_id FROM products WHERE id = ANY($1::uuid[]) AND category_id IS NOT NULL",
+      [parsedIds]
+    );
+    const categoryIds = catRes.rows.map(r => r.category_id);
+
+    let rows = [];
+    if (categoryIds.length > 0) {
+      const result = await db.query(
+        `SELECT v.* FROM v_products_with_price v
+         WHERE v.category_id = ANY($1) AND NOT (v.id = ANY($2::uuid[])) AND v.is_active = TRUE
+         ORDER BY v.is_bestseller DESC, v.avg_rating DESC NULLS LAST
+         LIMIT $3`,
+        [categoryIds, parsedIds, parseInt(limit)]
+      );
+      rows = result.rows;
+    }
+
+    if (rows.length === 0) {
+      const fallback = await db.query(
+        `SELECT v.* FROM v_products_with_price v
+         WHERE NOT (v.id = ANY($1::uuid[])) AND v.is_active = TRUE
+         ORDER BY v.is_bestseller DESC, v.avg_rating DESC NULLS LAST
+         LIMIT $2`,
+        [parsedIds, parseInt(limit)]
+      );
+      rows = fallback.rows;
+    }
+
+    const fetchedIds = rows.map((r) => r.id);
+    let variantsByProduct = {};
+    if (fetchedIds.length > 0) {
+      const varRes = await db.query(
+        `SELECT * FROM product_variants WHERE product_id = ANY($1) AND is_active = TRUE ORDER BY weight_grams ASC`,
+        [fetchedIds]
+      );
+      varRes.rows.forEach((v) => {
+        if (!variantsByProduct[v.product_id]) variantsByProduct[v.product_id] = [];
+        variantsByProduct[v.product_id].push(formatVariant(v));
+      });
+    }
+
+    let imagesByProduct = {};
+    if (fetchedIds.length > 0) {
+      const imgRes = await db.query(
+        `SELECT * FROM product_images WHERE product_id = ANY($1) 
+         ORDER BY sort_order ASC`,
+        [fetchedIds]
+      );
+      imgRes.rows.forEach(i => {
+        const pid = i.product_id;
+        if (!imagesByProduct[pid]) imagesByProduct[pid] = [];
+        imagesByProduct[pid].push(formatImage(i));
+      });
+    }
+
+    const products = rows.map((p) =>
+      formatProduct(p, variantsByProduct[p.id] || [], imagesByProduct[p.id] || [])
+    );
+    return res.json({ success: true, products });
+  } catch (err) {
+    console.error({ route: "GET /api/products/similar-multi", productIds, error: err.message });
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+}
+
 module.exports = {
-  getAllProducts, getProductBySlug, getWeightLabels, getSimilarProducts,
+  getAllProducts, getProductBySlug, getWeightLabels, getSimilarProducts, getSimilarProductsMulti,
   createProduct, updateProduct, deleteProduct,
   addVariant, updateVariant, deleteVariant,
-  addImage, addImages, deleteImage,
-  addReview, deleteReview
+  addImage, addImages, deleteImage
 };
