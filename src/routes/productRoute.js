@@ -1,7 +1,7 @@
 const express = require("express");
 const router  = express.Router();
 const {
-  getAllProducts, getProductBySlug, getWeightLabels, getSimilarProducts,
+  getAllProducts, getProductBySlug, getWeightLabels, getSimilarProducts, getSimilarProductsMulti,
   createProduct, updateProduct, deleteProduct,
   addVariant, updateVariant, deleteVariant,
   addImage, addImages, deleteImage,
@@ -17,6 +17,7 @@ router.get("/get-all",       getAllProducts);
 router.get("/get-by-slug",   getProductBySlug);
 router.get("/weight-labels", getWeightLabels);
 router.get("/similar",       getSimilarProducts);
+router.get("/similar-multi", getSimilarProductsMulti);
 
 // Admin — product
 router.post  ("/create-product", authenticate, isAdmin, createProduct);

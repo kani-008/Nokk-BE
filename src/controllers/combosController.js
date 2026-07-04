@@ -1,5 +1,5 @@
 const db = require("../config/db.js");
-const { uploadToSupabase } = require("../config/supabase.js");
+const { uploadToSupabase, deleteFromSupabase } = require("../config/supabase.js");
 
 const num = (v) => parseFloat(v) || 0;
 
@@ -15,11 +15,13 @@ async function fetchComboItemsMap(comboIds) {
     `SELECT ci.id, ci.combo_id, ci.product_id, ci.variant_id, ci.quantity,
             p.name_en AS product_name, p.name_ta AS product_name_ta,
             pv.weight_label, pv.price, pv.stock_qty,
-            cat.name_en AS category_name
+            cat.name_en AS category_name, cat.slug AS category_slug,
+            pi.image_url AS primary_image
      FROM combo_items ci
      JOIN products p ON p.id = ci.product_id
      JOIN product_variants pv ON pv.id = ci.variant_id
      LEFT JOIN categories cat ON cat.id = p.category_id
+     LEFT JOIN product_images pi ON pi.product_id = p.id AND pi.is_primary = TRUE
      WHERE ci.combo_id = ANY($1)
      ORDER BY ci.created_at ASC`,
     [comboIds]
@@ -37,6 +39,8 @@ async function fetchComboItemsMap(comboIds) {
       quantity: parseInt(r.quantity),
       inStock: parseInt(r.stock_qty) > 0,
       categoryName: r.category_name || null,
+      categorySlug: r.category_slug || null,
+      primaryImage: r.primary_image || null,
     });
   });
   return map;
@@ -65,6 +69,7 @@ function formatCombo(c, items = []) {
     inStock: allInStock,
     individualTotal: parseFloat(individualTotal.toFixed(2)),
     savings: parseFloat(Math.max(individualTotal - comboPrice, 0).toFixed(2)),
+    images: c.images || [],
   };
 }
 
@@ -118,9 +123,33 @@ async function getActiveCombos(req, res) {
          AND (end_date   IS NULL OR end_date   >= NOW())
        ORDER BY created_at DESC`
     );
-    const itemsMap = await fetchComboItemsMap(result.rows.map((r) => r.id));
+    const comboIds = result.rows.map(r => r.id);
+    const itemsMap = await fetchComboItemsMap(comboIds);
+
+    let imagesByCombo = {};
+    if (comboIds.length > 0) {
+      const imgRes = await db.query(
+        `SELECT id, combo_id, image_url, is_primary, sort_order FROM combo_images WHERE combo_id = ANY($1) ORDER BY sort_order ASC`,
+        [comboIds]
+      );
+      imgRes.rows.forEach(r => {
+        if (!imagesByCombo[r.combo_id]) imagesByCombo[r.combo_id] = [];
+        imagesByCombo[r.combo_id].push({
+          id: r.id,
+          imageUrl: r.image_url,
+          isPrimary: r.is_primary,
+          sortOrder: r.sort_order
+        });
+      });
+    }
+
+    const combos = result.rows.map(c => {
+      c.images = imagesByCombo[c.id] || [];
+      return formatCombo(c, itemsMap[c.id] || []);
+    });
+
     console.log({ route: "GET /api/combos/get-active", status: 200, count: result.rows.length });
-    return res.json({ success: true, combos: result.rows.map((c) => formatCombo(c, itemsMap[c.id] || [])) });
+    return res.json({ success: true, combos });
   } catch (err) {
     console.error({ route: "GET /api/combos/get-active", status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
@@ -135,9 +164,33 @@ async function getAllCombos(req, res) {
   console.log({ route: "GET /api/combos/get-all", status: "fetching all combos" });
   try {
     const result = await db.query(`SELECT * FROM combos ORDER BY created_at DESC`);
-    const itemsMap = await fetchComboItemsMap(result.rows.map((r) => r.id));
+    const comboIds = result.rows.map(r => r.id);
+    const itemsMap = await fetchComboItemsMap(comboIds);
+
+    let imagesByCombo = {};
+    if (comboIds.length > 0) {
+      const imgRes = await db.query(
+        `SELECT id, combo_id, image_url, is_primary, sort_order FROM combo_images WHERE combo_id = ANY($1) ORDER BY sort_order ASC`,
+        [comboIds]
+      );
+      imgRes.rows.forEach(r => {
+        if (!imagesByCombo[r.combo_id]) imagesByCombo[r.combo_id] = [];
+        imagesByCombo[r.combo_id].push({
+          id: r.id,
+          imageUrl: r.image_url,
+          isPrimary: r.is_primary,
+          sortOrder: r.sort_order
+        });
+      });
+    }
+
+    const combos = result.rows.map(c => {
+      c.images = imagesByCombo[c.id] || [];
+      return formatCombo(c, itemsMap[c.id] || []);
+    });
+
     console.log({ route: "GET /api/combos/get-all", status: 200, count: result.rows.length });
-    return res.json({ success: true, combos: result.rows.map((c) => formatCombo(c, itemsMap[c.id] || [])) });
+    return res.json({ success: true, combos });
   } catch (err) {
     console.error({ route: "GET /api/combos/get-all", status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
@@ -159,9 +212,18 @@ async function getComboById(req, res) {
       console.log({ route: "GET /api/combos/get-by-id", comboId: id, status: 404, message: "Combo not found" });
       return res.status(404).json({ success: false, message: "Combo not found" });
     }
+    const comboRow = result.rows[0];
+    const imgRes = await db.query(`SELECT id, image_url, is_primary, sort_order FROM combo_images WHERE combo_id = $1 ORDER BY sort_order ASC`, [id]);
+    comboRow.images = imgRes.rows.map(r => ({
+      id: r.id,
+      imageUrl: r.image_url,
+      isPrimary: r.is_primary,
+      sortOrder: r.sort_order
+    }));
+
     const itemsMap = await fetchComboItemsMap([id]);
     console.log({ route: "GET /api/combos/get-by-id", comboId: id, status: 200 });
-    return res.json({ success: true, combo: formatCombo(result.rows[0], itemsMap[id] || []) });
+    return res.json({ success: true, combo: formatCombo(comboRow, itemsMap[id] || []) });
   } catch (err) {
     console.error({ route: "GET /api/combos/get-by-id", comboId: id, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
@@ -172,7 +234,7 @@ async function getComboById(req, res) {
 // ADMIN — POST /api/combos/create-combo
 // Multipart: name, description?, comboPrice, isActive?, startDate?,
 // endDate?, items (JSON string: [{ productId, variantId, quantity }]),
-// imageFile?
+// imageFiles? (array of up to 5 images)
 // ==================================================================
 async function createCombo(req, res) {
   const { name, description, comboPrice, isActive, startDate, endDate } = req.body;
@@ -195,10 +257,19 @@ async function createCombo(req, res) {
     return res.status(400).json({ success: false, message: itemsError });
   }
 
-  let imageUrl = null;
-  if (req.file) {
-    imageUrl = await uploadToSupabase(req.file.buffer, req.file.mimetype, req.file.originalname, "combo");
+  const files = req.files || [];
+  let imageUrls = [];
+  try {
+    for (const file of files) {
+      const url = await uploadToSupabase(file.buffer, file.mimetype, file.originalname, "combo");
+      imageUrls.push(url);
+    }
+  } catch (uploadErr) {
+    console.error("Failed to upload combo images to Supabase:", uploadErr);
+    return res.status(502).json({ success: false, message: "Failed to upload images to storage" });
   }
+
+  const primaryUrl = imageUrls.length > 0 ? imageUrls[0] : null;
 
   const client = await db.getClient();
   try {
@@ -208,9 +279,23 @@ async function createCombo(req, res) {
       `INSERT INTO combos (name, description, image_url, combo_price, is_active, start_date, end_date)
        VALUES ($1,$2,$3,$4,$5,$6,$7)
        RETURNING *`,
-      [name.trim(), description || null, imageUrl, price, isActive ?? true, startDate || null, endDate || null]
+      [name.trim(), description || null, primaryUrl, price, isActive ?? true, startDate || null, endDate || null]
     );
     const combo = comboRes.rows[0];
+
+    const insertedImages = [];
+    for (let idx = 0; idx < imageUrls.length; idx++) {
+      const isPrimary = (idx === 0);
+      const imgUrl = imageUrls[idx];
+      const imgRes = await client.query(
+        `INSERT INTO combo_images (combo_id, image_url, is_primary, sort_order)
+         VALUES ($1, $2, $3, $4)
+         RETURNING id, image_url, is_primary, sort_order`,
+        [combo.id, imgUrl, isPrimary, idx]
+      );
+      insertedImages.push(imgRes.rows[0]);
+    }
+    combo.images = insertedImages;
 
     for (const item of items) {
       await client.query(
@@ -227,6 +312,9 @@ async function createCombo(req, res) {
     return res.status(201).json({ success: true, message: "Combo created", combo: formatCombo(combo, itemsMap[combo.id] || []) });
   } catch (err) {
     await client.query("ROLLBACK");
+    Promise.all(imageUrls.map(url => deleteFromSupabase(url))).catch(cleanErr => {
+      console.warn("[Supabase] async cleanup failed after create rollback:", cleanErr.message);
+    });
     console.error({ route: "POST /api/combos/create-combo", status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   } finally {
@@ -236,8 +324,6 @@ async function createCombo(req, res) {
 
 // ==================================================================
 // ADMIN — PUT /api/combos/update-combo
-// Same validation as create. When `items` is present, replaces the
-// entire combo_items set for that combo in the same transaction.
 // ==================================================================
 async function updateCombo(req, res) {
   const { id, name, description, comboPrice, isActive, startDate, endDate } = req.body;
@@ -270,20 +356,86 @@ async function updateCombo(req, res) {
       }
     }
 
-    let newImageUrl = req.file
-      ? await uploadToSupabase(req.file.buffer, req.file.mimetype, req.file.originalname, "combo")
-      : undefined;
+    const currentImgsRes = await db.query(
+      `SELECT id, image_url, is_primary FROM combo_images WHERE combo_id = $1`,
+      [id]
+    );
+
+    let removeImageIds = [];
+    if (req.body.removeImageIds) {
+      try {
+        removeImageIds = JSON.parse(req.body.removeImageIds);
+      } catch (err) {
+        removeImageIds = [];
+      }
+    }
+
+    const files = req.files || [];
+    const remainingCount = currentImgsRes.rows.filter(img => !removeImageIds.includes(img.id)).length;
+    if (remainingCount + files.length > 5) {
+      return res.status(400).json({ success: false, message: "Maximum 5 images allowed per combo" });
+    }
+
+    const imgsToDelete = currentImgsRes.rows.filter(img => removeImageIds.includes(img.id));
+    const urlsToDelete = imgsToDelete.map(img => img.image_url);
+
+    let newUrls = [];
+    try {
+      for (const file of files) {
+        const url = await uploadToSupabase(file.buffer, file.mimetype, file.originalname, "combo");
+        newUrls.push(url);
+      }
+    } catch (uploadErr) {
+      console.error("Failed to upload combo images during update:", uploadErr);
+      return res.status(502).json({ success: false, message: "Failed to upload images to storage" });
+    }
 
     const finalName = name !== undefined ? name.trim() : existing.name;
     const finalDesc = description !== undefined ? (description || null) : existing.description;
     const finalIsActive = isActive !== undefined ? isActive : existing.is_active;
     const finalStartDate = startDate !== undefined ? (startDate || null) : existing.start_date;
     const finalEndDate = endDate !== undefined ? (endDate || null) : existing.end_date;
-    const finalImageUrl = newImageUrl !== undefined ? newImageUrl : existing.image_url;
 
     const client = await db.getClient();
     try {
       await client.query("BEGIN");
+
+      if (removeImageIds.length > 0) {
+        await client.query(
+          `DELETE FROM combo_images WHERE combo_id = $1 AND id = ANY($2)`,
+          [id, removeImageIds]
+        );
+      }
+
+      let maxSort = -1;
+      const remImgs = currentImgsRes.rows.filter(img => !removeImageIds.includes(img.id));
+      if (remImgs.length > 0) {
+        const sortRes = await client.query(`SELECT MAX(sort_order) AS max_sort FROM combo_images WHERE combo_id = $1`, [id]);
+        maxSort = sortRes.rows[0].max_sort ?? -1;
+      }
+      for (let idx = 0; idx < newUrls.length; idx++) {
+        await client.query(
+          `INSERT INTO combo_images (combo_id, image_url, is_primary, sort_order)
+           VALUES ($1, $2, FALSE, $3)`,
+          [id, newUrls[idx], maxSort + 1 + idx]
+        );
+      }
+
+      const allImgsRes = await client.query(
+        `SELECT id, image_url, is_primary FROM combo_images WHERE combo_id = $1 ORDER BY sort_order ASC`,
+        [id]
+      );
+      let finalPrimaryUrl = null;
+      if (allImgsRes.rows.length > 0) {
+        let hasPrimary = allImgsRes.rows.some(img => img.is_primary);
+        if (!hasPrimary) {
+          const primaryId = allImgsRes.rows[0].id;
+          await client.query(`UPDATE combo_images SET is_primary = TRUE WHERE id = $1`, [primaryId]);
+          allImgsRes.rows[0].is_primary = true;
+        }
+        const primaryImg = allImgsRes.rows.find(img => img.is_primary) || allImgsRes.rows[0];
+        finalPrimaryUrl = primaryImg.image_url;
+      }
 
       const comboRes = await client.query(
         `UPDATE combos SET
@@ -291,9 +443,14 @@ async function updateCombo(req, res) {
            is_active = $5, start_date = $6, end_date = $7, updated_at = NOW()
          WHERE id = $8
          RETURNING *`,
-        [finalName, finalDesc, finalImageUrl, finalPrice, finalIsActive, finalStartDate, finalEndDate, id]
+        [finalName, finalDesc, finalPrimaryUrl, finalPrice, finalIsActive, finalStartDate, finalEndDate, id]
       );
       const combo = comboRes.rows[0];
+      combo.images = allImgsRes.rows.map(r => ({
+        id: r.id,
+        imageUrl: r.image_url,
+        isPrimary: r.is_primary
+      }));
 
       if (itemsProvided) {
         await client.query(`DELETE FROM combo_items WHERE combo_id = $1`, [id]);
@@ -308,11 +465,18 @@ async function updateCombo(req, res) {
 
       await client.query("COMMIT");
 
+      Promise.all(urlsToDelete.map(url => deleteFromSupabase(url))).catch(cleanErr => {
+        console.warn("[Supabase] async deletes failed after update commit:", cleanErr.message);
+      });
+
       const itemsMap = await fetchComboItemsMap([id]);
       console.log({ route: "PUT /api/combos/update-combo", comboId: id, status: 200 });
       return res.json({ success: true, message: "Combo updated", combo: formatCombo(combo, itemsMap[id] || []) });
     } catch (err) {
       await client.query("ROLLBACK");
+      Promise.all(newUrls.map(url => deleteFromSupabase(url))).catch(cleanErr => {
+        console.warn("[Supabase] async cleanup failed after update rollback:", cleanErr.message);
+      });
       throw err;
     } finally {
       client.release();
@@ -450,7 +614,19 @@ async function getPublicComboDetail(req, res) {
       ? parseFloat((reviews.reduce((sum, r) => sum + r.rating, 0) / reviewCount).toFixed(2))
       : 0;
 
-    const baseCombo = formatCombo(result.rows[0], items);
+    const comboRow = result.rows[0];
+    const imgRes = await db.query(
+      `SELECT id, image_url, is_primary, sort_order FROM combo_images WHERE combo_id = $1 ORDER BY sort_order ASC`,
+      [id]
+    );
+    comboRow.images = imgRes.rows.map(r => ({
+      id: r.id,
+      imageUrl: r.image_url,
+      isPrimary: r.is_primary,
+      sortOrder: r.sort_order
+    }));
+
+    const baseCombo = formatCombo(comboRow, items);
     const enrichedCombo = {
       ...baseCombo,
       avgRating,

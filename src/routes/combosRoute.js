@@ -13,7 +13,7 @@ const authenticate = require("../middleware/auth.js");
 const { isAdmin } = require("../middleware/auth.js");
 const { uploadProduct } = require("../controllers/uploadController.js");
 
-const comboUpload = uploadProduct.single("imageFile");
+const comboUpload = uploadProduct.array("imageFiles", 5);
 
 // Public — live combos only
 router.get("/get-active", getActiveCombos);

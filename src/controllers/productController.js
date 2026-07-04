@@ -1038,8 +1038,67 @@ async function getSimilarProducts(req, res) {
   }
 }
 
+// PUBLIC — GET /api/products/similar-multi?productIds=&limit=
+// Returns similar products matching any categories of the listed productIds.
+async function getSimilarProductsMulti(req, res) {
+  const { productIds, limit = 8 } = req.query;
+  if (!productIds) return res.status(400).json({ success: false, message: "productIds query param is required" });
+  
+  const parsedIds = productIds.split(",").map(id => id.trim()).filter(Boolean);
+  if (parsedIds.length === 0) return res.status(400).json({ success: false, message: "Invalid productIds query param" });
+
+  try {
+    const catRes = await db.query(
+      "SELECT DISTINCT category_id FROM products WHERE id = ANY($1) AND category_id IS NOT NULL",
+      [parsedIds]
+    );
+    const categoryIds = catRes.rows.map(r => r.category_id);
+
+    let rows = [];
+    if (categoryIds.length > 0) {
+      const result = await db.query(
+        `SELECT v.* FROM v_products_with_price v
+         WHERE v.category_id = ANY($1) AND NOT (v.id = ANY($2)) AND v.is_active = TRUE
+         ORDER BY v.is_bestseller DESC, v.avg_rating DESC NULLS LAST
+         LIMIT $3`,
+        [categoryIds, parsedIds, parseInt(limit)]
+      );
+      rows = result.rows;
+    }
+
+    if (rows.length === 0) {
+      const fallback = await db.query(
+        `SELECT v.* FROM v_products_with_price v
+         WHERE NOT (v.id = ANY($1)) AND v.is_active = TRUE
+         ORDER BY v.is_bestseller DESC, v.avg_rating DESC NULLS LAST
+         LIMIT $2`,
+        [parsedIds, parseInt(limit)]
+      );
+      rows = fallback.rows;
+    }
+
+    const fetchedIds = rows.map((r) => r.id);
+    let variantsByProduct = {};
+    if (fetchedIds.length > 0) {
+      const varRes = await db.query(
+        `SELECT * FROM product_variants WHERE product_id = ANY($1) AND is_active = TRUE ORDER BY weight_grams ASC`,
+        [fetchedIds]
+      );
+      varRes.rows.forEach((v) => {
+        if (!variantsByProduct[v.product_id]) variantsByProduct[v.product_id] = [];
+        variantsByProduct[v.product_id].push(formatVariant(v));
+      });
+    }
+    const products = rows.map((p) => formatProduct(p, variantsByProduct[p.id] || []));
+    return res.json({ success: true, products });
+  } catch (err) {
+    console.error({ route: "GET /api/products/similar-multi", productIds, error: err.message });
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+}
+
 module.exports = {
-  getAllProducts, getProductBySlug, getWeightLabels, getSimilarProducts,
+  getAllProducts, getProductBySlug, getWeightLabels, getSimilarProducts, getSimilarProductsMulti,
   createProduct, updateProduct, deleteProduct,
   addVariant, updateVariant, deleteVariant,
   addImage, addImages, deleteImage
