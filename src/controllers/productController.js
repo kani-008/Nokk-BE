@@ -1049,7 +1049,7 @@ async function getSimilarProductsMulti(req, res) {
 
   try {
     const catRes = await db.query(
-      "SELECT DISTINCT category_id FROM products WHERE id = ANY($1) AND category_id IS NOT NULL",
+      "SELECT DISTINCT category_id FROM products WHERE id = ANY($1::uuid[]) AND category_id IS NOT NULL",
       [parsedIds]
     );
     const categoryIds = catRes.rows.map(r => r.category_id);
@@ -1058,7 +1058,7 @@ async function getSimilarProductsMulti(req, res) {
     if (categoryIds.length > 0) {
       const result = await db.query(
         `SELECT v.* FROM v_products_with_price v
-         WHERE v.category_id = ANY($1) AND NOT (v.id = ANY($2)) AND v.is_active = TRUE
+         WHERE v.category_id = ANY($1) AND NOT (v.id = ANY($2::uuid[])) AND v.is_active = TRUE
          ORDER BY v.is_bestseller DESC, v.avg_rating DESC NULLS LAST
          LIMIT $3`,
         [categoryIds, parsedIds, parseInt(limit)]
@@ -1069,7 +1069,7 @@ async function getSimilarProductsMulti(req, res) {
     if (rows.length === 0) {
       const fallback = await db.query(
         `SELECT v.* FROM v_products_with_price v
-         WHERE NOT (v.id = ANY($1)) AND v.is_active = TRUE
+         WHERE NOT (v.id = ANY($1::uuid[])) AND v.is_active = TRUE
          ORDER BY v.is_bestseller DESC, v.avg_rating DESC NULLS LAST
          LIMIT $2`,
         [parsedIds, parseInt(limit)]
@@ -1089,7 +1089,24 @@ async function getSimilarProductsMulti(req, res) {
         variantsByProduct[v.product_id].push(formatVariant(v));
       });
     }
-    const products = rows.map((p) => formatProduct(p, variantsByProduct[p.id] || []));
+
+    let imagesByProduct = {};
+    if (fetchedIds.length > 0) {
+      const imgRes = await db.query(
+        `SELECT * FROM product_images WHERE product_id = ANY($1) 
+         ORDER BY sort_order ASC`,
+        [fetchedIds]
+      );
+      imgRes.rows.forEach(i => {
+        const pid = i.product_id;
+        if (!imagesByProduct[pid]) imagesByProduct[pid] = [];
+        imagesByProduct[pid].push(formatImage(i));
+      });
+    }
+
+    const products = rows.map((p) =>
+      formatProduct(p, variantsByProduct[p.id] || [], imagesByProduct[p.id] || [])
+    );
     return res.json({ success: true, products });
   } catch (err) {
     console.error({ route: "GET /api/products/similar-multi", productIds, error: err.message });

@@ -362,7 +362,13 @@ async function createOffer(req, res) {
       console.error("Warning: post-create offer side effects failed:", sideError.message);
     }
 
-    console.log({ route: "POST /api/offers", status: 201, offerId: newOffer.id });
+    console.log({
+      route: "POST /api/offers",
+      status: 201,
+      offerId: newOffer.id,
+      showAsBanner: finalShowAsBanner,
+      showInAnnouncement: finalShowInAnnouncement
+    });
     return res.status(201).json({ success: true, message: "Offer created", offer: formatOffer(newOffer) });
   } catch (err) {
     console.error({ route: "POST /api/offers", status: 500, error: err.message });
@@ -602,7 +608,13 @@ async function updateOffer(req, res) {
       await deleteFromSupabase(existing.image_url);
     }
 
-    console.log({ route: "PUT /api/offers/update-offer", offerId: id, status: 200 });
+    console.log({
+      route: "PUT /api/offers/update-offer",
+      offerId: id,
+      status: 200,
+      showAsBanner: finalShowAsBanner,
+      showInAnnouncement: finalShowInAnnouncement
+    });
     return res.json({ success: true, message: "Offer updated", offer: formatOffer(updatedOffer) });
   } catch (err) {
     console.error({ route: "PUT /api/offers/update-offer", offerId: id, status: 500, error: err.message });
