@@ -2,16 +2,7 @@ const bcrypt = require("bcryptjs");
 const { createNotification } = require("./notificationController.js");
 const jwt = require("jsonwebtoken");
 const db = require("../config/db.js");
-// Mock OTP functions — SMS OTP (2Factor/Twilio) has been removed.
-// WhatsApp OTP integration will be implemented in the future.
-async function sendOtp(phone, templateName) {
-  console.log(`[Mock OTP] sendOtp to ${phone} using template ${templateName}`);
-  return "mock-session-id";
-}
-async function verifyOtp(phone, sessionId, otp) {
-  console.log(`[Mock OTP] verifyOtp for ${phone} with sessionId ${sessionId} and otp ${otp}`);
-  return true;
-}
+const { generateAndSendOtp, verifyOtpHash } = require("../services/whatsappService.js");
 
 // ------------------------------------------------------------------
 // Config (read from .env)
@@ -387,18 +378,27 @@ async function registerOtpCreate(req, res) {
       return res.status(409).json({ success: false, message: "This phone number is already registered" });
     }
 
-    const sessionId = await sendOtp(phone, "nokk_register_otp");
+    let otpHash, messageId;
+    try {
+      const result = await generateAndSendOtp(phone);
+      otpHash = result.otpHash;
+      messageId = result.messageId;
+    } catch (sendErr) {
+      console.error({ route: "POST /register-otp", phone, status: 502, error: sendErr.message });
+      return res.status(502).json({ success: false, message: "Could not send OTP right now. Please try again." });
+    }
+
     await db.query(
       "DELETE FROM otp_verifications WHERE phone = $1 AND user_id IS NULL",
       [phone]
     );
     await db.query(
       `INSERT INTO otp_verifications (user_id, phone, otp_code, verified, expires_at, session_id)
-       VALUES (NULL, $1, '', FALSE, $2, $3)`,
-      [phone, new Date(Date.now() + 10 * 60 * 1000), sessionId]
+       VALUES (NULL, $1, $2, FALSE, $3, $4)`,
+      [phone, otpHash, new Date(Date.now() + 10 * 60 * 1000), messageId]
     );
 
-    console.log({ route: "POST /register-otp", phone, status: 200, message: "OTP sent via 2Factor" });
+    console.log({ route: "POST /register-otp", phone, status: 200, message: "OTP sent via WhatsApp" });
     return res.json({ success: true, message: "OTP sent" });
   } catch (err) {
     console.error({ route: "POST /register-otp", phone, status: 500, error: err.message });
@@ -448,19 +448,28 @@ async function otpgenerate(req, res) {
     }
     const userId = userRes.rows[0].id;
 
-    const sessionId = await sendOtp(phone, "Nokk_forgot_otp");
+    let otpHash, messageId;
+    try {
+      const result = await generateAndSendOtp(phone);
+      otpHash = result.otpHash;
+      messageId = result.messageId;
+    } catch (sendErr) {
+      console.error({ route: "POST /otp-create", phone, status: 502, error: sendErr.message });
+      return res.status(502).json({ success: false, message: "Could not send OTP right now. Please try again." });
+    }
+
     await db.query("DELETE FROM otp_verifications WHERE user_id = $1", [userId]);
     await db.query(
       `INSERT INTO otp_verifications (user_id, phone, otp_code, verified, expires_at, session_id)
-       VALUES ($1, $2, '', FALSE, $3, $4)`,
-      [userId, phone, new Date(Date.now() + 10 * 60 * 1000), sessionId]
+       VALUES ($1, $2, $3, FALSE, $4, $5)`,
+      [userId, phone, otpHash, new Date(Date.now() + 10 * 60 * 1000), messageId]
     );
 
     console.log({
       route: "POST /otp-create",
       phone,
       status: 200,
-      message: "2Factor OTP sent",
+      message: "WhatsApp OTP sent",
     });
     return res.json({ success: true, message: "OTP sent" });
   } catch (err) {
@@ -517,17 +526,20 @@ async function otpverify(req, res) {
     const user = userRes.rows[0];
 
     const pendingRow = await db.query(
-      `SELECT session_id FROM otp_verifications
+      `SELECT otp_code FROM otp_verifications
        WHERE user_id = $1 AND verified = FALSE AND expires_at > NOW()
        ORDER BY expires_at DESC LIMIT 1`,
       [user.id]
     );
-    if (!pendingRow.rows.length || !pendingRow.rows[0].session_id) {
+    if (!pendingRow.rows.length || !pendingRow.rows[0].otp_code) {
       console.log({ route: "POST /otp-verify", phone, status: 400, message: "OTP session not found or expired" });
       return res.status(400).json({ success: false, message: "OTP expired or not found. Please request a new one." });
     }
-    await verifyOtp(phone, pendingRow.rows[0].session_id, otp);
-    // verifyOtp throws on mismatch — reaching here means success
+    const isValid = await verifyOtpHash(otp, pendingRow.rows[0].otp_code);
+    if (!isValid) {
+      console.log({ route: "POST /otp-verify", phone, status: 400, message: "OTP mismatch" });
+      return res.status(400).json({ success: false, message: "Invalid or expired OTP" });
+    }
 
     // Write a verified record so /reset-password has a DB gate to check.
     // Clear any old sessions first so only this one is valid.
@@ -537,7 +549,7 @@ async function otpverify(req, res) {
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 min to reset password
     await db.query(
       "INSERT INTO otp_verifications (user_id, phone, otp_code, verified, expires_at) VALUES ($1, $2, $3, TRUE, $4)",
-      [user.id, phone, otp, expiresAt],
+      [user.id, phone, pendingRow.rows[0].otp_code, expiresAt],
     );
 
     console.log({ route: "POST /otp-verify", phone, status: 200 });
@@ -770,19 +782,18 @@ async function register(req, res) {
         return res.status(400).json({ success: false, message: "otp is required" });
       }
       const regRow = await db.query(
-        `SELECT session_id FROM otp_verifications
+        `SELECT otp_code FROM otp_verifications
          WHERE phone = $1 AND user_id IS NULL AND verified = FALSE AND expires_at > NOW()
          ORDER BY expires_at DESC LIMIT 1`,
         [normalizedPhone]
       );
-      if (!regRow.rows.length || !regRow.rows[0].session_id) {
+      if (!regRow.rows.length || !regRow.rows[0].otp_code) {
         console.log({ route: "POST /register", phone: normalizedPhone, status: 400, message: "OTP session not found or expired" });
         return res.status(400).json({ success: false, message: "OTP expired or not found. Please request a new one." });
       }
-      try {
-        await verifyOtp(normalizedPhone, regRow.rows[0].session_id, String(otp).trim());
-      } catch (tfErr) {
-        console.log({ route: "POST /register", phone: normalizedPhone, status: 400, message: `2Factor OTP check failed: ${tfErr.message}` });
+      const isValid = await verifyOtpHash(otp, regRow.rows[0].otp_code);
+      if (!isValid) {
+        console.log({ route: "POST /register", phone: normalizedPhone, status: 400, message: "OTP mismatch" });
         return res.status(400).json({ success: false, message: "Invalid or expired OTP" });
       }
       await db.query(

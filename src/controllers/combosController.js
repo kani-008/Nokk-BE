@@ -14,7 +14,6 @@ async function fetchComboItemsMap(comboIds) {
   const res = await db.query(
     `SELECT ci.id, ci.combo_id, ci.product_id, ci.variant_id, ci.quantity,
             p.name_en AS product_name, p.name_ta AS product_name_ta,
-            p.description AS product_description, p.how_to_use AS product_how_to_use, p.storage_tips AS product_storage_tips,
             pv.weight_label, pv.price, pv.stock_qty
      FROM combo_items ci
      JOIN products p ON p.id = ci.product_id
@@ -35,9 +34,6 @@ async function fetchComboItemsMap(comboIds) {
       price: num(r.price),
       quantity: parseInt(r.quantity),
       inStock: parseInt(r.stock_qty) > 0,
-      description: r.product_description || "",
-      howToUse: r.product_how_to_use || "",
-      storageTips: r.product_storage_tips || "",
     });
   });
   return map;
@@ -161,10 +157,8 @@ async function getComboById(req, res) {
       return res.status(404).json({ success: false, message: "Combo not found" });
     }
     const itemsMap = await fetchComboItemsMap([id]);
-    let combo = formatCombo(result.rows[0], itemsMap[id] || []);
-    combo = await populateComboReviewsAndRating(combo);
     console.log({ route: "GET /api/combos/get-by-id", comboId: id, status: 200 });
-    return res.json({ success: true, combo });
+    return res.json({ success: true, combo: formatCombo(result.rows[0], itemsMap[id] || []) });
   } catch (err) {
     console.error({ route: "GET /api/combos/get-by-id", comboId: id, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
@@ -348,47 +342,6 @@ async function deleteCombo(req, res) {
     console.error({ route: "DELETE /api/combos/delete-combo", comboId: id, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
-}
-
-async function populateComboReviewsAndRating(combo) {
-  const productIds = combo.items.map((it) => it.productId);
-  let reviews = [];
-  if (productIds.length > 0) {
-    const revRes = await db.query(
-      `SELECT pr.*, u.full_name
-       FROM product_reviews pr
-       LEFT JOIN users u ON u.id = pr.user_id
-       WHERE pr.product_id = ANY($1) AND pr.is_approved = TRUE
-       ORDER BY pr.created_at DESC`,
-      [productIds]
-    );
-    const reviewIds = revRes.rows.map(r => r.id);
-    let reviewImagesMap = {};
-    if (reviewIds.length > 0) {
-      const revImgRes = await db.query(
-        `SELECT * FROM product_review_images WHERE review_id = ANY($1) ORDER BY sort_order ASC`,
-        [reviewIds]
-      );
-      revImgRes.rows.forEach(img => {
-        if (!reviewImagesMap[img.review_id]) reviewImagesMap[img.review_id] = [];
-        reviewImagesMap[img.review_id].push(img);
-      });
-    }
-    const { formatReview } = require("./reviewController.js");
-    reviews = revRes.rows.map(r => formatReview(r, reviewImagesMap[r.id] || []));
-  }
-
-  let avgRating = 0;
-  let reviewCount = reviews.length;
-  if (reviewCount > 0) {
-    const sum = reviews.reduce((acc, r) => acc + r.rating, 0);
-    avgRating = sum / reviewCount;
-  }
-
-  combo.reviews = reviews;
-  combo.avgRating = avgRating;
-  combo.reviewCount = reviewCount;
-  return combo;
 }
 
 module.exports = {

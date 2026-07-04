@@ -29,6 +29,7 @@ const uploadRoute = require("./src/routes/uploadRoute.js");
 const notificationRoute = require("./src/routes/notificationRoute.js");
 const locationRoute = require("./src/routes/locationRoute.js");
 const sitemapRoute = require("./src/routes/sitemapRoute.js");
+const whatsappRoute = require("./src/routes/whatsappRoutes.js");
 const { maintenanceGuard } = require("./src/middleware/maintenance.js");
 
 const app = express();
@@ -101,6 +102,10 @@ app.get("/", (req, res) => {
 
 // ── Sitemap — mounted at root before /api routes, no auth ─────────
 app.use("/sitemap.xml", sitemapRoute);
+
+// ── WhatsApp Webhook & API Routes ─────────────────────────────────
+// Must be mounted before maintenanceGuard to always be active
+app.use("/api/whatsapp", whatsappRoute);
 
 // ── Maintenance mode guard (runs before all API routes, skips auth + settings) ──
 app.use("/api", maintenanceGuard);
