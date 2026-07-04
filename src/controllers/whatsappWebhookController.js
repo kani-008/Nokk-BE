@@ -15,7 +15,8 @@ function verifyWebhook(req, res) {
     console.log("[WhatsApp Webhook] Verification successful.");
     return res.status(200).send(challenge);
   } else {
-    console.warn("[WhatsApp Webhook] Verification failed. Token mismatch or invalid mode.");
+    console.warn(`[WhatsApp Webhook] Verification failed. Expected verify token: "${WHATSAPP_VERIFY_TOKEN}"`);
+    console.warn(`Received query: ${JSON.stringify(req.query)}, url: ${req.originalUrl}`);
     return res.sendStatus(403);
   }
 }
