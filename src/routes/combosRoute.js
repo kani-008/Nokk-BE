@@ -7,6 +7,7 @@ const {
   createCombo,
   updateCombo,
   deleteCombo,
+  getPublicComboDetail,
 } = require("../controllers/combosController.js");
 const authenticate = require("../middleware/auth.js");
 const { isAdmin } = require("../middleware/auth.js");
@@ -16,6 +17,7 @@ const comboUpload = uploadProduct.single("imageFile");
 
 // Public — live combos only
 router.get("/get-active", getActiveCombos);
+router.get("/get-public-detail", getPublicComboDetail);
 
 // Admin
 router.get("/get-all", authenticate, isAdmin, getAllCombos);
