@@ -45,6 +45,34 @@ async function updateSettings(req, res) {
     return res.status(400).json({ success: false, message: "No settings provided" });
   }
 
+  // Validation for known numeric settings
+  for (const [key, value] of entries) {
+    if (key === "shippingCharge") {
+      const numVal = Number(value);
+      if (isNaN(numVal) || numVal <= 0) {
+        return res.status(400).json({ success: false, message: "Standard Delivery Fee (shippingCharge) must be greater than 0" });
+      }
+    }
+    if (key === "freeShippingThreshold") {
+      const numVal = Number(value);
+      if (isNaN(numVal) || numVal < 0) {
+        return res.status(400).json({ success: false, message: "Free Shipping Above (freeShippingThreshold) cannot be negative" });
+      }
+    }
+    if (key === "minOrderValue") {
+      const numVal = Number(value);
+      if (isNaN(numVal) || numVal < 0) {
+        return res.status(400).json({ success: false, message: "Minimum Order Value (minOrderValue) cannot be negative" });
+      }
+    }
+    if (key === "maxCartItems") {
+      const numVal = Number(value);
+      if (isNaN(numVal) || !Number.isInteger(numVal) || numVal < 1) {
+        return res.status(400).json({ success: false, message: "Max Items per Cart (maxCartItems) must be an integer greater than or equal to 1" });
+      }
+    }
+  }
+
   const client = await db.getClient();
   try {
     await client.query("BEGIN");

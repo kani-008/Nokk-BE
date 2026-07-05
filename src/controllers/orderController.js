@@ -58,16 +58,16 @@ async function resolveOfferAdjustedPrices(client, productCategoryPairs) {
 // view's effective_min_price computation, applied to a resolved variant price.
 // ------------------------------------------------------------------
 function applyOfferToPrice(price, offer) {
-  if (!offer) return price;
+  if (!offer) return Math.round(price);
+  let finalPrice = price;
   if (offer.offerType === "percentage") {
     const rawDiscount = (price * offer.discountValue) / 100;
     const discount = offer.maxDiscount != null ? Math.min(rawDiscount, offer.maxDiscount) : rawDiscount;
-    return Math.max(price - discount, 0);
+    finalPrice = Math.max(price - discount, 0);
+  } else if (offer.offerType === "flat") {
+    finalPrice = Math.max(price - offer.discountValue, 0);
   }
-  if (offer.offerType === "flat") {
-    return Math.max(price - offer.discountValue, 0);
-  }
-  return price;
+  return Math.round(finalPrice);
 }
 
 function formatOrder(ord, items = [], timeline = []) {
@@ -406,12 +406,12 @@ async function _createOrderCore(client, {
     memberLines.forEach((l, idx) => {
       const rowTotal = l.rawPrice * l.quantity;
       if (idx < memberLines.length - 1) {
-        const shareTotal = parseFloat((rowTotal * (group.totalPrice / individualTotal)).toFixed(2));
-        allocatedTotal += shareTotal;
-        l.finalPrice = parseFloat((shareTotal / l.quantity).toFixed(2));
+        const sharePriceRaw = (rowTotal * (group.totalPrice / individualTotal)) / l.quantity;
+        l.finalPrice = Math.round(sharePriceRaw);
+        allocatedTotal += l.finalPrice * l.quantity;
       } else {
-        const remainderTotal = parseFloat((group.totalPrice - allocatedTotal).toFixed(2));
-        l.finalPrice = parseFloat((remainderTotal / l.quantity).toFixed(2));
+        const remainderTotal = group.totalPrice - allocatedTotal;
+        l.finalPrice = Math.round(remainderTotal / l.quantity);
       }
     });
     console.log(`${tag} STEP 2b — combo "${group.name}": individualTotal=₹${individualTotal.toFixed(2)} comboPrice=₹${group.totalPrice} savings=₹${Math.max(individualTotal - group.totalPrice, 0).toFixed(2)}`);
@@ -1454,12 +1454,12 @@ async function createRazorpayOrder(req, res) {
       memberLines.forEach((l, idx) => {
         const rowTotal = l.rawPrice * l.quantity;
         if (idx < memberLines.length - 1) {
-          const shareTotal = parseFloat((rowTotal * (group.totalPrice / individualTotal)).toFixed(2));
-          allocatedTotal += shareTotal;
-          l.finalPrice = parseFloat((shareTotal / l.quantity).toFixed(2));
+          const sharePriceRaw = (rowTotal * (group.totalPrice / individualTotal)) / l.quantity;
+          l.finalPrice = Math.round(sharePriceRaw);
+          allocatedTotal += l.finalPrice * l.quantity;
         } else {
-          const remainderTotal = parseFloat((group.totalPrice - allocatedTotal).toFixed(2));
-          l.finalPrice = parseFloat((remainderTotal / l.quantity).toFixed(2));
+          const remainderTotal = group.totalPrice - allocatedTotal;
+          l.finalPrice = Math.round(remainderTotal / l.quantity);
         }
       });
     }
