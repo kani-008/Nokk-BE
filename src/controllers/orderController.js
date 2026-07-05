@@ -2046,4 +2046,6 @@ module.exports = {
   createRazorpayOrder,
   verifyRazorpayPayment,
   handleRazorpayWebhook,
+  resolveOfferAdjustedPrices,
+  applyOfferToPrice,
 };
