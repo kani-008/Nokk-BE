@@ -71,7 +71,8 @@ function formatOffer(o) {
     appliesTo: o.applies_to,
     imageUrl: o.image_url || null,
     showAsBanner: o.show_as_banner ?? false,
-    showInAnnouncement: o.show_in_announcement ?? false
+    showInAnnouncement: o.show_in_announcement ?? false,
+    bannerId: o.banner_id || null
   };
 }
 
@@ -87,10 +88,12 @@ async function getActiveOffers(req, res) {
       `SELECT
          o.*,
          p.name_en  AS product_name,
-         c.name_en  AS category_name
+         c.name_en  AS category_name,
+         b.id       AS banner_id
        FROM offers o
        LEFT JOIN products   p ON p.id = o.product_id
        LEFT JOIN categories c ON c.id = o.category_id
+       LEFT JOIN banners    b ON b.linked_offer_id = o.id
        WHERE o.is_active = TRUE
          AND (o.start_date IS NULL OR o.start_date <= NOW())
          AND (o.end_date   IS NULL OR o.end_date   >= NOW())
@@ -156,10 +159,12 @@ async function getAllOffers(req, res) {
       `SELECT
          o.*,
          p.name_en  AS product_name,
-         c.name_en  AS category_name
+         c.name_en  AS category_name,
+         b.id       AS banner_id
        FROM offers o
        LEFT JOIN products   p ON p.id = o.product_id
        LEFT JOIN categories c ON c.id = o.category_id
+       LEFT JOIN banners    b ON b.linked_offer_id = o.id
        ORDER BY o.created_at DESC`
     );
     console.log({ route: "GET /api/offers/all", status: 200, count: result.rows.length });
@@ -183,10 +188,11 @@ async function getOfferById(req, res) {
   }
   try {
     const result = await db.query(
-      `SELECT o.*, p.name_en AS product_name, c.name_en AS category_name
+      `SELECT o.*, p.name_en AS product_name, c.name_en AS category_name, b.id AS banner_id
        FROM offers o
        LEFT JOIN products   p ON p.id = o.product_id
        LEFT JOIN categories c ON c.id = o.category_id
+       LEFT JOIN banners    b ON b.linked_offer_id = o.id
        WHERE o.id = $1`,
       [id]
     );
@@ -218,13 +224,11 @@ async function createOffer(req, res) {
     minOrderValue, maxDiscount,
     startDate, endDate, isActive,
     offerType, appliesTo,
-    showAsBanner, showInAnnouncement
+    showAsBanner, showInAnnouncement,
+    bannerId
   } = req.body;
   let imageUrl = null;
-  if (req.file) {
-    imageUrl = await uploadToSupabase(req.file.buffer, req.file.mimetype, req.file.originalname, "offer");
-  }
-  console.log({ route: "POST /api/offers", body: { name, discountValue, productId, categoryId, minOrderValue, maxDiscount, startDate, endDate, isActive, offerType, appliesTo, showAsBanner, showInAnnouncement }, status: "creating offer" });
+  console.log({ route: "POST /api/offers", body: { name, discountValue, productId, categoryId, minOrderValue, maxDiscount, startDate, endDate, isActive, offerType, appliesTo, showAsBanner, showInAnnouncement, bannerId }, status: "creating offer" });
 
   if (!name || discountValue == null) {
     console.log({ route: "POST /api/offers", status: 400, message: "name and discountValue are required" });
@@ -295,6 +299,26 @@ async function createOffer(req, res) {
   const asBool = (v) => v === true || v === "true";
   const finalShowAsBanner = asBool(showAsBanner);
   const finalShowInAnnouncement = asBool(showInAnnouncement);
+  const finalBannerId = bannerId && bannerId !== "" ? parseInt(bannerId, 10) : null;
+
+  if (finalShowAsBanner && finalBannerId) {
+    const conflictRes = await db.query(
+      `SELECT o.name FROM offers o
+       JOIN banners b ON b.linked_offer_id = o.id
+       WHERE b.id = $1
+         AND o.is_active = TRUE
+         AND (o.start_date IS NULL OR o.start_date <= NOW())
+         AND (o.end_date   IS NULL OR o.end_date   >= NOW())`,
+      [finalBannerId]
+    );
+    if (conflictRes.rows.length > 0) {
+      console.log({ route: "POST /api/offers", status: 409, message: "Selected banner is already linked to a different live offer" });
+      return res.status(409).json({
+        success: false,
+        message: `Selected banner is already linked to a different live offer: "${conflictRes.rows[0].name}"`
+      });
+    }
+  }
 
   try {
     const result = await db.query(
@@ -340,20 +364,18 @@ async function createOffer(req, res) {
 
       const textInfo = buildBannerText(newOffer, productName, categoryName);
 
-      // 1. Auto-create Banner + Slide text overlay
-      if (finalShowAsBanner && newOffer.image_url) {
-        const bannerRes = await db.query(
-          `INSERT INTO banners (title, subtitle, image_url, is_active, linked_offer_id)
-           VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-          [newOffer.name, newOffer.description, newOffer.image_url, newOffer.is_active, newOffer.id]
-        );
-        const newBannerId = bannerRes.rows[0].id;
+      // 1. Link to existing Banner + Slide text overlay
+      if (finalShowAsBanner && finalBannerId) {
         await db.query(
           `INSERT INTO btext (banner_id, heading, subtext, is_active)
            VALUES ($1, $2, $3, $4)`,
-          [newBannerId, textInfo.heading, textInfo.subtext, newOffer.is_active]
+          [finalBannerId, textInfo.heading, textInfo.subtext, newOffer.is_active]
         );
-        console.log(`Auto-created banner ${newBannerId} and btext overlay for offer ${newOffer.id}`);
+        await db.query(
+          `UPDATE banners SET linked_offer_id = $1, updated_at = NOW() WHERE id = $2`,
+          [newOffer.id, finalBannerId]
+        );
+        console.log(`Attached btext overlay and linked banner ${finalBannerId} to offer ${newOffer.id}`);
       }
 
       // 2. Auto-drive site Announcement
@@ -392,12 +414,10 @@ async function updateOffer(req, res) {
     minOrderValue, maxDiscount,
     startDate, endDate, isActive,
     offerType, appliesTo,
-    showAsBanner, showInAnnouncement
+    showAsBanner, showInAnnouncement,
+    bannerId
   } = req.body;
-  let newImageUrl = req.file
-    ? await uploadToSupabase(req.file.buffer, req.file.mimetype, req.file.originalname, "offer")
-    : undefined;
-  console.log({ route: "PUT /api/offers/update-offer", offerId: id, body: { name, description, discountValue, productId, categoryId, minOrderValue, maxDiscount, startDate, endDate, isActive, offerType, appliesTo, showAsBanner, showInAnnouncement }, status: "updating offer" });
+  console.log({ route: "PUT /api/offers/update-offer", offerId: id, body: { name, description, discountValue, productId, categoryId, minOrderValue, maxDiscount, startDate, endDate, isActive, offerType, appliesTo, showAsBanner, showInAnnouncement, bannerId }, status: "updating offer" });
 
   if (!id) {
     console.log({ route: "PUT /api/offers/update-offer", status: 400, message: "id is required" });
@@ -479,10 +499,31 @@ async function updateOffer(req, res) {
     const finalStartDate = startDate !== undefined ? (startDate || null) : existing.start_date;
     const finalEndDate = endDate !== undefined ? (endDate || null) : existing.end_date;
     const finalIsActive = isActive !== undefined ? isActive : existing.is_active;
-    const finalImageUrl = newImageUrl !== undefined ? newImageUrl : existing.image_url;
+    const finalImageUrl = existing.image_url;
 
     const finalShowAsBanner = showAsBanner !== undefined ? asBool(showAsBanner) : existing.show_as_banner;
     const finalShowInAnnouncement = showInAnnouncement !== undefined ? asBool(showInAnnouncement) : existing.show_in_announcement;
+    const finalBannerId = bannerId && bannerId !== "" ? parseInt(bannerId, 10) : null;
+
+    if (finalShowAsBanner && finalBannerId) {
+      const conflictRes = await db.query(
+        `SELECT o.name FROM offers o
+         JOIN banners b ON b.linked_offer_id = o.id
+         WHERE b.id = $1
+           AND o.id != $2
+           AND o.is_active = TRUE
+           AND (o.start_date IS NULL OR o.start_date <= NOW())
+           AND (o.end_date   IS NULL OR o.end_date   >= NOW())`,
+        [finalBannerId, id]
+      );
+      if (conflictRes.rows.length > 0) {
+        console.log({ route: "PUT /api/offers/update-offer", status: 409, message: "Selected banner is already linked to a different live offer" });
+        return res.status(409).json({
+          success: false,
+          message: `Selected banner is already linked to a different live offer: "${conflictRes.rows[0].name}"`
+        });
+      }
+    }
 
     const result = await db.query(
       `UPDATE offers SET
@@ -542,50 +583,15 @@ async function updateOffer(req, res) {
       const textInfo = buildBannerText(updatedOffer, productName, categoryName);
 
       // --- BANNER OVERLAY SYNC ---
-      const linkedBannerRes = await db.query("SELECT * FROM banners WHERE linked_offer_id = $1", [updatedOffer.id]);
-      const linkedBanner = linkedBannerRes.rows[0];
+      const oldBannerRes = await db.query("SELECT id FROM banners WHERE linked_offer_id = $1", [updatedOffer.id]);
+      const oldBannerId = oldBannerRes.rows[0]?.id;
 
-      if (finalShowAsBanner) {
-        if (!linkedBanner) {
-          if (updatedOffer.image_url) {
-            const bannerRes = await db.query(
-              `INSERT INTO banners (title, subtitle, image_url, is_active, linked_offer_id)
-               VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-              [updatedOffer.name, updatedOffer.description, updatedOffer.image_url, updatedOffer.is_active, updatedOffer.id]
-            );
-            const newBannerId = bannerRes.rows[0].id;
-            await db.query(
-              `INSERT INTO btext (banner_id, heading, subtext, is_active)
-               VALUES ($1, $2, $3, $4)`,
-              [newBannerId, textInfo.heading, textInfo.subtext, updatedOffer.is_active]
-            );
-            console.log(`Auto-created banner ${newBannerId} on update for offer ${updatedOffer.id}`);
-          }
-        } else {
-          // If a linked banner already exists, update the banner's image (only if a
-          // new image was uploaded this request) and always resync the overlay text
-          // + active state — the offer's discount/description/end-date/active status
-          // may have changed even when no new image was uploaded.
-          if (newImageUrl) {
-            await db.query(
-              `UPDATE banners SET image_url = $1, title = $2, subtitle = $3, is_active = $4, updated_at = NOW() WHERE id = $5`,
-              [newImageUrl, updatedOffer.name, updatedOffer.description, updatedOffer.is_active, linkedBanner.id]
-            );
-            console.log(`Updated image and fields for linked banner ${linkedBanner.id} to ${newImageUrl}`);
-          } else {
-            await db.query(
-              `UPDATE banners SET title = $1, subtitle = $2, is_active = $3, updated_at = NOW() WHERE id = $4`,
-              [updatedOffer.name, updatedOffer.description, updatedOffer.is_active, linkedBanner.id]
-            );
-            console.log(`Updated fields (title, subtitle, is_active) for linked banner ${linkedBanner.id}`);
-          }
-
-          // Resync only the btext row auto-created alongside this banner (the oldest
-          // one, by bt_id) — an admin may have manually added extra overlay slides to
-          // this banner afterward, and those must not be overwritten.
+      if (finalShowAsBanner && finalBannerId) {
+        if (oldBannerId === finalBannerId) {
+          // Sync overlay text in place
           const autoBtextRes = await db.query(
             `SELECT bt_id FROM btext WHERE banner_id = $1 ORDER BY bt_id ASC LIMIT 1`,
-            [linkedBanner.id]
+            [finalBannerId]
           );
           const autoBtextId = autoBtextRes.rows[0]?.bt_id;
           if (autoBtextId) {
@@ -593,17 +599,60 @@ async function updateOffer(req, res) {
               `UPDATE btext SET heading = $1, subtext = $2, is_active = $3, updated_at = NOW() WHERE bt_id = $4`,
               [textInfo.heading, textInfo.subtext, updatedOffer.is_active, autoBtextId]
             );
-            console.log(`Synced btext overlay ${autoBtextId} for linked banner ${linkedBanner.id} on offer ${updatedOffer.id} update`);
+          } else {
+            await db.query(
+              `INSERT INTO btext (banner_id, heading, subtext, is_active)
+               VALUES ($1, $2, $3, $4)`,
+              [finalBannerId, textInfo.heading, textInfo.subtext, updatedOffer.is_active]
+            );
           }
+          // Also sync active state and content metadata of the banner itself
+          await db.query(
+            `UPDATE banners SET title = $1, subtitle = $2, is_active = $3, updated_at = NOW() WHERE id = $4`,
+            [updatedOffer.name, updatedOffer.description, updatedOffer.is_active, finalBannerId]
+          );
+        } else {
+          // Banner selection changed: detach from old banner
+          if (oldBannerId) {
+            const oldBtextRes = await db.query(
+              `SELECT bt_id FROM btext WHERE banner_id = $1 ORDER BY bt_id ASC LIMIT 1`,
+              [oldBannerId]
+            );
+            const oldBtextId = oldBtextRes.rows[0]?.bt_id;
+            if (oldBtextId) {
+              await db.query(`DELETE FROM btext WHERE bt_id = $1`, [oldBtextId]);
+            }
+            await db.query(
+              `UPDATE banners SET linked_offer_id = NULL, updated_at = NOW() WHERE id = $1`,
+              [oldBannerId]
+            );
+          }
+          // Attach to new banner
+          await db.query(
+            `INSERT INTO btext (banner_id, heading, subtext, is_active)
+             VALUES ($1, $2, $3, $4)`,
+            [finalBannerId, textInfo.heading, textInfo.subtext, updatedOffer.is_active]
+          );
+          await db.query(
+            `UPDATE banners SET linked_offer_id = $1, title = $2, subtitle = $3, is_active = $4, updated_at = NOW() WHERE id = $5`,
+            [updatedOffer.id, updatedOffer.name, updatedOffer.description, updatedOffer.is_active, finalBannerId]
+          );
         }
       } else {
-        // If showAsBanner is now false and a linked banner exists, delete that banner
-        if (linkedBanner) {
-          await db.query("DELETE FROM banners WHERE id = $1", [linkedBanner.id]);
-          if (linkedBanner.image_url && linkedBanner.image_url !== updatedOffer.image_url) {
-            await deleteFromSupabase(linkedBanner.image_url);
+        // Toggled off or deselected: clean up link
+        if (oldBannerId) {
+          const oldBtextRes = await db.query(
+            `SELECT bt_id FROM btext WHERE banner_id = $1 ORDER BY bt_id ASC LIMIT 1`,
+            [oldBannerId]
+          );
+          const oldBtextId = oldBtextRes.rows[0]?.bt_id;
+          if (oldBtextId) {
+            await db.query(`DELETE FROM btext WHERE bt_id = $1`, [oldBtextId]);
           }
-          console.log(`Deleted linked banner ${linkedBanner.id} and cleaned up banner image from storage`);
+          await db.query(
+            `UPDATE banners SET linked_offer_id = NULL, updated_at = NOW() WHERE id = $1`,
+            [oldBannerId]
+          );
         }
       }
 
@@ -632,10 +681,6 @@ async function updateOffer(req, res) {
       }
     } catch (sideError) {
       console.error("Warning: post-update offer side effects failed:", sideError.message);
-    }
-
-    if (newImageUrl && existing.image_url && newImageUrl !== existing.image_url) {
-      await deleteFromSupabase(existing.image_url);
     }
 
     console.log({
