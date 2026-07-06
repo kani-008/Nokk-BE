@@ -1024,6 +1024,36 @@ async function googleLogin(req, res) {
     }
 
     if (user.status === "deactivated") {
+      if (user.auth_provider === "google") {
+        // A Google-only account has no password to check — the verified
+        // Google token itself is sufficient proof, same bar used to create
+        // a brand-new Google account above. Reactivate transparently.
+        const reactivateRes = await db.query(
+          "UPDATE users SET status = 'active', updated_at = NOW() WHERE id = $1 RETURNING *",
+          [user.id],
+        );
+        const reactivatedUser = reactivateRes.rows[0];
+        const accessToken = signAccessToken(reactivatedUser);
+        const refreshToken = signRefreshToken(reactivatedUser);
+        const expiresAt = new Date(Date.now() + REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000);
+        await db.query(
+          "INSERT INTO refresh_tokens (user_id, token, expires_at) VALUES ($1, $2, $3)",
+          [reactivatedUser.id, refreshToken, expiresAt],
+        );
+
+        console.log({ route: "POST /google-login", email, userId: reactivatedUser.id, status: 200, message: "Reactivated Google-only account transparently" });
+        return res.json({
+          success: true,
+          message: "Signed in successfully",
+          accessToken,
+          refreshToken,
+          user: publicUser(reactivatedUser),
+        });
+      }
+
+      // Email/password account: reactivation still requires the password,
+      // so surface DEACTIVATED and let the frontend collect it via
+      // /auth/google-link-confirm (which reactivates on a successful match).
       console.log({ route: "POST /google-login", email, status: 200, message: "DEACTIVATED" });
       return res.json({ success: false, code: "DEACTIVATED", userId: user.id });
     }
@@ -1099,10 +1129,6 @@ async function googleLinkConfirm(req, res) {
       console.log({ route: "POST /google-link-confirm", email, status: 403, message: "Account blocked" });
       return res.status(403).json({ success: false, message: "This account has been blocked. Please contact support." });
     }
-    if (user.status === "deactivated") {
-      console.log({ route: "POST /google-link-confirm", email, status: 200, message: "DEACTIVATED" });
-      return res.json({ success: false, code: "DEACTIVATED", userId: user.id });
-    }
 
     const ok = await bcrypt.compare(password, user.password_hash || "");
     if (!ok) {
@@ -1110,21 +1136,34 @@ async function googleLinkConfirm(req, res) {
       return res.status(401).json({ success: false, message: "Invalid credentials" });
     }
 
-    const accessToken = signAccessToken(user);
-    const refreshToken = signRefreshToken(user);
+    let user2 = user;
+    if (user.status === "deactivated") {
+      // Password confirmed: reactivate as part of this same successful
+      // link-confirm, mirroring reactivate()'s behavior. Keeps the security
+      // bar consistent (password required wherever one exists) while still
+      // giving this email/password account a path back in via Google.
+      const reactivateRes = await db.query(
+        "UPDATE users SET status = 'active', updated_at = NOW() WHERE id = $1 RETURNING *",
+        [user.id],
+      );
+      user2 = reactivateRes.rows[0];
+    }
+
+    const accessToken = signAccessToken(user2);
+    const refreshToken = signRefreshToken(user2);
     const expiresAt = new Date(Date.now() + REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000);
     await db.query(
       "INSERT INTO refresh_tokens (user_id, token, expires_at) VALUES ($1, $2, $3)",
-      [user.id, refreshToken, expiresAt],
+      [user2.id, refreshToken, expiresAt],
     );
 
-    console.log({ route: "POST /google-link-confirm", email, userId: user.id, status: 200 });
+    console.log({ route: "POST /google-link-confirm", email, userId: user2.id, status: 200 });
     return res.json({
       success: true,
       message: "Signed in successfully",
       accessToken,
       refreshToken,
-      user: publicUser(user),
+      user: publicUser(user2),
     });
   } catch (err) {
     console.error({ route: "POST /google-link-confirm", email, status: 500, error: err.message });
