@@ -562,13 +562,38 @@ async function updateOffer(req, res) {
             console.log(`Auto-created banner ${newBannerId} on update for offer ${updatedOffer.id}`);
           }
         } else {
-          // If a linked banner already exists, update only the banner's image if a new image was uploaded this request.
+          // If a linked banner already exists, update the banner's image (only if a
+          // new image was uploaded this request) and always resync the overlay text
+          // + active state — the offer's discount/description/end-date/active status
+          // may have changed even when no new image was uploaded.
           if (newImageUrl) {
             await db.query(
-              `UPDATE banners SET image_url = $1, updated_at = NOW() WHERE id = $2`,
-              [newImageUrl, linkedBanner.id]
+              `UPDATE banners SET image_url = $1, title = $2, subtitle = $3, is_active = $4, updated_at = NOW() WHERE id = $5`,
+              [newImageUrl, updatedOffer.name, updatedOffer.description, updatedOffer.is_active, linkedBanner.id]
             );
-            console.log(`Updated image for linked banner ${linkedBanner.id} to ${newImageUrl}`);
+            console.log(`Updated image and fields for linked banner ${linkedBanner.id} to ${newImageUrl}`);
+          } else {
+            await db.query(
+              `UPDATE banners SET title = $1, subtitle = $2, is_active = $3, updated_at = NOW() WHERE id = $4`,
+              [updatedOffer.name, updatedOffer.description, updatedOffer.is_active, linkedBanner.id]
+            );
+            console.log(`Updated fields (title, subtitle, is_active) for linked banner ${linkedBanner.id}`);
+          }
+
+          // Resync only the btext row auto-created alongside this banner (the oldest
+          // one, by bt_id) — an admin may have manually added extra overlay slides to
+          // this banner afterward, and those must not be overwritten.
+          const autoBtextRes = await db.query(
+            `SELECT bt_id FROM btext WHERE banner_id = $1 ORDER BY bt_id ASC LIMIT 1`,
+            [linkedBanner.id]
+          );
+          const autoBtextId = autoBtextRes.rows[0]?.bt_id;
+          if (autoBtextId) {
+            await db.query(
+              `UPDATE btext SET heading = $1, subtext = $2, is_active = $3, updated_at = NOW() WHERE bt_id = $4`,
+              [textInfo.heading, textInfo.subtext, updatedOffer.is_active, autoBtextId]
+            );
+            console.log(`Synced btext overlay ${autoBtextId} for linked banner ${linkedBanner.id} on offer ${updatedOffer.id} update`);
           }
         }
       } else {
