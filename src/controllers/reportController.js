@@ -63,7 +63,7 @@ async function getOrderReport(req, res) {
        FROM orders o
        LEFT JOIN order_items oi ON oi.order_id = o.id
        WHERE ($1::text IS NULL OR o.status         = $1)
-         AND ($2::text IS NULL OR o.payment_status = $2)
+         AND ($2::text IS NULL OR o.payment_status::text = $2)
          ${dateClause}
        GROUP BY o.id
        ORDER BY o.created_at DESC
@@ -75,7 +75,7 @@ async function getOrderReport(req, res) {
       `SELECT COUNT(*) AS total
        FROM orders o
        WHERE ($1::text IS NULL OR o.status         = $1)
-         AND ($2::text IS NULL OR o.payment_status = $2)
+         AND ($2::text IS NULL OR o.payment_status::text = $2)
          ${dateClause}`,
       countParams
     );
@@ -136,7 +136,7 @@ async function getRevenueReport(req, res) {
   try {
     const result = await db.query(
       `SELECT
-         date_trunc($1, created_at)        AS period,
+         date_trunc($1::text, created_at)        AS period,
          COUNT(*)                          AS orders,
          COALESCE(SUM(subtotal),        0) AS subtotal,
          COALESCE(SUM(delivery_charge), 0) AS delivery,
@@ -145,7 +145,7 @@ async function getRevenueReport(req, res) {
        FROM orders
        WHERE status != 'cancelled' AND payment_method != 'replacement'
          ${dateClause}
-       GROUP BY date_trunc($1, created_at)
+       GROUP BY date_trunc($1::text, created_at)
        ORDER BY period ASC`,
       [trunc, ...dateParams]
     );
@@ -223,7 +223,7 @@ async function getProductReport(req, res) {
        JOIN orders o      ON o.id = oi.order_id
        WHERE o.status != 'cancelled' AND o.payment_method != 'replacement'
          AND ($1::text IS NULL OR c.slug = $1)
-         AND ($2::text IS NULL OR o.payment_status = $2)
+         AND ($2::text IS NULL OR o.payment_status::text = $2)
          ${dateClause}
        GROUP BY p.id, p.name_en, p.name_ta, c.name_en
        ORDER BY revenue DESC
