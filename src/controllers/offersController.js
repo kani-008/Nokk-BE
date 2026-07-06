@@ -610,11 +610,6 @@ async function updateOffer(req, res) {
               [finalBannerId, textInfo.heading, textInfo.subtext, updatedOffer.is_active, updatedOffer.id]
             );
           }
-          // Also sync active state and content metadata of the banner itself
-          await db.query(
-            `UPDATE banners SET title = $1, subtitle = $2, is_active = $3, updated_at = NOW() WHERE id = $4`,
-            [updatedOffer.name, updatedOffer.description, updatedOffer.is_active, finalBannerId]
-          );
         } else {
           // Banner selection changed: detach from old banner
           if (oldBannerId) {
@@ -634,8 +629,8 @@ async function updateOffer(req, res) {
             [finalBannerId, textInfo.heading, textInfo.subtext, updatedOffer.is_active, updatedOffer.id]
           );
           await db.query(
-            `UPDATE banners SET linked_offer_id = $1, title = $2, subtitle = $3, is_active = $4, updated_at = NOW() WHERE id = $5`,
-            [updatedOffer.id, updatedOffer.name, updatedOffer.description, updatedOffer.is_active, finalBannerId]
+            `UPDATE banners SET linked_offer_id = $1, updated_at = NOW() WHERE id = $2`,
+            [updatedOffer.id, finalBannerId]
           );
         }
       } else {
