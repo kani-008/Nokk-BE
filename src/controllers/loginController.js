@@ -3,6 +3,7 @@ const { createNotification } = require("./notificationController.js");
 const jwt = require("jsonwebtoken");
 const db = require("../config/db.js");
 const { generateAndSendOtp, verifyOtpHash } = require("../services/whatsappService.js");
+const { OAuth2Client } = require("google-auth-library");
 
 // ------------------------------------------------------------------
 // Config (read from .env)
@@ -16,6 +17,9 @@ if (!ACCESS_TOKEN_SECRET || !REFRESH_TOKEN_SECRET) {
 }
 const ACCESS_TOKEN_TTL = "15m";
 const REFRESH_TOKEN_TTL_DAYS = 7;
+
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
+const googleClient = new OAuth2Client(GOOGLE_CLIENT_ID);
 
 // ------------------------------------------------------------------
 // Small inline validators
@@ -351,6 +355,11 @@ async function checkPhone(req, res) {
   }
 }
 
+// ── PAUSED: WhatsApp OTP endpoint (registerOtpCreate) ──────────────
+// Meta Business verification is not complete yet. This calls the real
+// WhatsApp Cloud API and will fail against Meta until that's done.
+// Uncomment once Meta approves the WhatsApp Business number.
+/*
 // ==================================================================
 // POST /register-otp   -> registerOtpCreate
 // Body: { phone }
@@ -407,7 +416,13 @@ async function registerOtpCreate(req, res) {
       .json({ success: false, message: "Internal server error" });
   }
 }
+*/
 
+// ── PAUSED: WhatsApp OTP endpoint (otpgenerate) ──────────────
+// Meta Business verification is not complete yet. This calls the real
+// WhatsApp Cloud API and will fail against Meta until that's done.
+// Uncomment once Meta approves the WhatsApp Business number.
+/*
 // ==================================================================
 // POST /otp-create   -> otpgenerate
 // Body: { phone }
@@ -484,7 +499,13 @@ async function otpgenerate(req, res) {
       .json({ success: false, message: "Internal server error" });
   }
 }
+*/
 
+// ── PAUSED: WhatsApp OTP endpoint (otpverify) ──────────────
+// Meta Business verification is not complete yet. This calls the real
+// WhatsApp Cloud API and will fail against Meta until that's done.
+// Uncomment once Meta approves the WhatsApp Business number.
+/*
 // ==================================================================
 // POST /otp-verify   -> otpverify
 // Body: { phone, otp }
@@ -569,6 +590,7 @@ async function otpverify(req, res) {
       .json({ success: false, message: "Internal server error" });
   }
 }
+*/
 
 // ==================================================================
 // POST /reset-password   -> setpassword
@@ -909,15 +931,257 @@ async function reactivate(req, res) {
   }
 }
 
+// ------------------------------------------------------------------
+// Google ID token verification helper (shared by googleLogin and
+// googleLinkConfirm). Throws if the token is malformed/expired/wrong
+// audience — callers must catch and respond 401.
+// ------------------------------------------------------------------
+async function verifyGoogleIdToken(credential) {
+  const ticket = await googleClient.verifyIdToken({
+    idToken: credential,
+    audience: GOOGLE_CLIENT_ID,
+  });
+  return ticket.getPayload();
+}
+
+// ==================================================================
+// POST /google-login   -> googleLogin
+// Body: { credential }  (Google ID token from the frontend)
+// Signs in an existing account, creates a new one, or asks the
+// frontend to collect a password when the email already belongs to
+// a password-based account.
+// ==================================================================
+async function googleLogin(req, res) {
+  const { credential } = req.body;
+  console.log({ route: "POST /google-login", status: "verifying Google credential" });
+
+  if (!credential) {
+    return res.status(400).json({ success: false, message: "credential is required" });
+  }
+
+  let payload;
+  try {
+    payload = await verifyGoogleIdToken(credential);
+  } catch (err) {
+    console.log({ route: "POST /google-login", status: 401, message: "Google token verification failed", error: err.message });
+    return res.status(401).json({ success: false, message: "Invalid Google token" });
+  }
+
+  if (payload.email_verified !== true) {
+    console.log({ route: "POST /google-login", status: 401, message: "Google email not verified" });
+    return res.status(401).json({ success: false, message: "Google account email is not verified" });
+  }
+
+  const email = String(payload.email).trim().toLowerCase();
+
+  try {
+    const result = await db.query("SELECT * FROM users WHERE email = $1 LIMIT 1", [email]);
+
+    if (result.rows.length === 0) {
+      // CASE A — no account yet: create one and sign in.
+      const fullName = payload.name || email.split("@")[0];
+      const insertRes = await db.query(
+        `INSERT INTO users (email, phone, full_name, role, status, email_verified, auth_provider, password_hash)
+         VALUES ($1, NULL, $2, 'customer', 'active', TRUE, 'google', NULL)
+         RETURNING *`,
+        [email, fullName],
+      );
+      const user = insertRes.rows[0];
+
+      const accessToken = signAccessToken(user);
+      const refreshToken = signRefreshToken(user);
+      const expiresAt = new Date(Date.now() + REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000);
+      await db.query(
+        "INSERT INTO refresh_tokens (user_id, token, expires_at) VALUES ($1, $2, $3)",
+        [user.id, refreshToken, expiresAt],
+      );
+
+      createNotification({
+        eventType: "new_signup",
+        priority: "low",
+        title: "New Customer Signup",
+        message: `${fullName} (${email}) just registered via Google`,
+        entityType: "users",
+        entityId: String(user.id),
+        link: `/admin/customers/${user.id}`,
+      });
+
+      console.log({ route: "POST /google-login", email, userId: user.id, status: 200, message: "New Google account created" });
+      return res.json({
+        success: true,
+        message: "Signed in successfully",
+        accessToken,
+        refreshToken,
+        user: publicUser(user),
+      });
+    }
+
+    const user = result.rows[0];
+
+    if (user.status === "blocked") {
+      console.log({ route: "POST /google-login", email, status: 403, message: "Account blocked" });
+      return res.status(403).json({ success: false, message: "This account has been blocked. Please contact support." });
+    }
+
+    if (user.status === "deactivated") {
+      if (user.auth_provider === "google") {
+        // A Google-only account has no password to check — the verified
+        // Google token itself is sufficient proof, same bar used to create
+        // a brand-new Google account above. Reactivate transparently.
+        const reactivateRes = await db.query(
+          "UPDATE users SET status = 'active', updated_at = NOW() WHERE id = $1 RETURNING *",
+          [user.id],
+        );
+        const reactivatedUser = reactivateRes.rows[0];
+        const accessToken = signAccessToken(reactivatedUser);
+        const refreshToken = signRefreshToken(reactivatedUser);
+        const expiresAt = new Date(Date.now() + REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000);
+        await db.query(
+          "INSERT INTO refresh_tokens (user_id, token, expires_at) VALUES ($1, $2, $3)",
+          [reactivatedUser.id, refreshToken, expiresAt],
+        );
+
+        console.log({ route: "POST /google-login", email, userId: reactivatedUser.id, status: 200, message: "Reactivated Google-only account transparently" });
+        return res.json({
+          success: true,
+          message: "Signed in successfully",
+          accessToken,
+          refreshToken,
+          user: publicUser(reactivatedUser),
+        });
+      }
+
+      // Email/password account: reactivation still requires the password,
+      // so surface DEACTIVATED and let the frontend collect it via
+      // /auth/google-link-confirm (which reactivates on a successful match).
+      console.log({ route: "POST /google-login", email, status: 200, message: "DEACTIVATED" });
+      return res.json({ success: false, code: "DEACTIVATED", userId: user.id });
+    }
+
+    if (user.auth_provider === "google") {
+      // CASE D — returning Google user.
+      const accessToken = signAccessToken(user);
+      const refreshToken = signRefreshToken(user);
+      const expiresAt = new Date(Date.now() + REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000);
+      await db.query(
+        "INSERT INTO refresh_tokens (user_id, token, expires_at) VALUES ($1, $2, $3)",
+        [user.id, refreshToken, expiresAt],
+      );
+
+      console.log({ route: "POST /google-login", email, userId: user.id, status: 200 });
+      return res.json({
+        success: true,
+        message: "Signed in successfully",
+        accessToken,
+        refreshToken,
+        user: publicUser(user),
+      });
+    }
+
+    // CASE E — email/password account with the same email: confirm identity first.
+    console.log({ route: "POST /google-login", email, userId: user.id, status: 200, message: "NEEDS_PASSWORD_CONFIRM" });
+    return res.json({ success: false, code: "NEEDS_PASSWORD_CONFIRM" });
+  } catch (err) {
+    console.error({ route: "POST /google-login", email, status: 500, error: err.message });
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+}
+
+// ==================================================================
+// POST /google-link-confirm   -> googleLinkConfirm
+// Body: { credential, password }
+// Confirms a Google sign-in attempt against an existing password
+// account with the same email, without changing auth_provider.
+// ==================================================================
+async function googleLinkConfirm(req, res) {
+  const { credential, password } = req.body;
+  console.log({ route: "POST /google-link-confirm", status: "verifying Google credential" });
+
+  if (!credential || !password) {
+    return res.status(400).json({ success: false, message: "credential and password are required" });
+  }
+
+  let payload;
+  try {
+    payload = await verifyGoogleIdToken(credential);
+  } catch (err) {
+    console.log({ route: "POST /google-link-confirm", status: 401, message: "Google token verification failed", error: err.message });
+    return res.status(401).json({ success: false, message: "Invalid Google token" });
+  }
+
+  if (payload.email_verified !== true) {
+    console.log({ route: "POST /google-link-confirm", status: 401, message: "Google email not verified" });
+    return res.status(401).json({ success: false, message: "Invalid credentials" });
+  }
+
+  const email = String(payload.email).trim().toLowerCase();
+
+  try {
+    const result = await db.query("SELECT * FROM users WHERE email = $1 LIMIT 1", [email]);
+    if (result.rows.length === 0) {
+      console.log({ route: "POST /google-link-confirm", email, status: 401, message: "Invalid credentials" });
+      return res.status(401).json({ success: false, message: "Invalid credentials" });
+    }
+
+    const user = result.rows[0];
+
+    if (user.status === "blocked") {
+      console.log({ route: "POST /google-link-confirm", email, status: 403, message: "Account blocked" });
+      return res.status(403).json({ success: false, message: "This account has been blocked. Please contact support." });
+    }
+
+    const ok = await bcrypt.compare(password, user.password_hash || "");
+    if (!ok) {
+      console.log({ route: "POST /google-link-confirm", email, status: 401, message: "Invalid credentials" });
+      return res.status(401).json({ success: false, message: "Invalid credentials" });
+    }
+
+    let user2 = user;
+    if (user.status === "deactivated") {
+      // Password confirmed: reactivate as part of this same successful
+      // link-confirm, mirroring reactivate()'s behavior. Keeps the security
+      // bar consistent (password required wherever one exists) while still
+      // giving this email/password account a path back in via Google.
+      const reactivateRes = await db.query(
+        "UPDATE users SET status = 'active', updated_at = NOW() WHERE id = $1 RETURNING *",
+        [user.id],
+      );
+      user2 = reactivateRes.rows[0];
+    }
+
+    const accessToken = signAccessToken(user2);
+    const refreshToken = signRefreshToken(user2);
+    const expiresAt = new Date(Date.now() + REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000);
+    await db.query(
+      "INSERT INTO refresh_tokens (user_id, token, expires_at) VALUES ($1, $2, $3)",
+      [user2.id, refreshToken, expiresAt],
+    );
+
+    console.log({ route: "POST /google-link-confirm", email, userId: user2.id, status: 200 });
+    return res.json({
+      success: true,
+      message: "Signed in successfully",
+      accessToken,
+      refreshToken,
+      user: publicUser(user2),
+    });
+  } catch (err) {
+    console.error({ route: "POST /google-link-confirm", email, status: 500, error: err.message });
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+}
+
 module.exports = {
   getlogin,
   register,
   checkPhone,
-  registerOtpCreate,
-  otpgenerate,
-  otpverify,
+  // registerOtpCreate, // PAUSED — Meta not ready, restore when approved
+  // otpgenerate,       // PAUSED — Meta not ready, restore when approved
+  // otpverify,         // PAUSED — Meta not ready, restore when approved
   setpassword,
   refreshAccessToken,
   logout,
   reactivate,
+  googleLogin,
+  googleLinkConfirm,
 };

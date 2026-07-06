@@ -711,7 +711,7 @@ async function deleteProduct(req, res) {
     }
 
     console.log({ route: "DELETE /api/products/delete-product", productId: id, status: 200 });
-    return res.json({ success: true, message: "Product deactivated (soft delete — order history preserved) and images cleared" });
+    return res.status(200).json({ success: true, message: "Product deactivated (soft delete — order history preserved) and images cleared" });
   } catch (err) {
     await client.query("ROLLBACK");
     console.error({ route: "DELETE /api/products/delete-product", productId: id, status: 500, error: err.message });
@@ -810,7 +810,7 @@ async function deleteVariant(req, res) {
       return res.status(404).json({ success: false, message: "Variant not found" });
     }
     console.log({ route: "DELETE /api/products/delete-variant", productId: id, variantId, status: 200 });
-    return res.json({ success: true, message: "Variant deleted successfully" });
+    return res.status(200).json({ success: true, message: "Variant deleted successfully" });
   } catch (err) {
     if (err.code === "23503") {
       console.log({ route: "DELETE /api/products/delete-variant", productId: id, variantId, status: 200, info: "foreign key constraint violation, soft-deactivating variant instead" });
@@ -822,7 +822,7 @@ async function deleteVariant(req, res) {
         if (softDelRes.rows.length === 0) {
           return res.status(404).json({ success: false, message: "Variant not found" });
         }
-        return res.json({ success: true, message: "Variant cannot be hard deleted due to order history; deactivated instead" });
+        return res.status(200).json({ success: true, message: "Variant cannot be hard deleted due to order history; deactivated instead" });
       } catch (softErr) {
         console.error({ route: "DELETE /api/products/delete-variant", productId: id, variantId, status: 500, error: softErr.message });
         return res.status(500).json({ success: false, message: "Internal server error" });
@@ -974,7 +974,7 @@ async function deleteImage(req, res) {
       console.warn(`[Supabase] async delete failed for "${result.rows[0].image_url}": ${err.message}`);
     });
     console.log({ route: "DELETE /api/products/delete-image", productId: id, imageId, status: 200 });
-    return res.json({ success: true, message: "Image deleted" });
+    return res.status(200).json({ success: true, message: "Image deleted" });
   } catch (err) {
     console.error({ route: "DELETE /api/products/delete-image", productId: id, imageId, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
@@ -1114,8 +1114,50 @@ async function getSimilarProductsMulti(req, res) {
   }
 }
 
+// ==================================================================
+// PUBLIC/ADMIN — GET /api/products/search-suggestions
+// Minimal endpoint returning light suggestions for autocomplete dropdown.
+// Query: ?q=queryText
+// ==================================================================
+async function getProductSuggestions(req, res) {
+  const query = req.query.q || "";
+  console.log({ route: "GET /api/products/search-suggestions", query, status: "fetching suggestions" });
+
+  if (!query || query.trim().length < 2) {
+    return res.json({ success: true, suggestions: [] });
+  }
+
+  const searchTerm = query.trim();
+
+  try {
+    const result = await db.query(
+      `SELECT id, name_en, name_ta, slug, primary_image, min_price, avg_rating
+       FROM v_products_with_price
+       WHERE is_active = TRUE
+         AND (name_en ILIKE $1 OR name_ta ILIKE $1 OR description ILIKE $1)
+       ORDER BY avg_rating DESC, name_en ASC
+       LIMIT 8`,
+      [`%${searchTerm}%`]
+    );
+
+    const suggestions = result.rows.map((row) => ({
+      id: row.id,
+      name: row.name_ta ? `${row.name_en} (${row.name_ta})` : row.name_en,
+      slug: row.slug,
+      primaryImage: row.primary_image || null,
+      minPrice: num(row.min_price),
+    }));
+
+    return res.json({ success: true, suggestions });
+  } catch (err) {
+    console.error({ route: "GET /api/products/search-suggestions", error: err.message });
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+}
+
 module.exports = {
   getAllProducts, getProductBySlug, getWeightLabels, getSimilarProducts, getSimilarProductsMulti,
+  getProductSuggestions,
   createProduct, updateProduct, deleteProduct,
   addVariant, updateVariant, deleteVariant,
   addImage, addImages, deleteImage

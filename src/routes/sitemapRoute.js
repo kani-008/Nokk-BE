@@ -18,7 +18,7 @@ router.get("/", async (req, res) => {
     const { rows } = await db.query(
       `SELECT slug, updated_at
          FROM v_products_with_price
-        WHERE in_stock = true
+        WHERE is_active = true AND total_stock > 0
         ORDER BY updated_at DESC`
     );
 

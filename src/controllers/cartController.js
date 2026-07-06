@@ -1,4 +1,5 @@
 const db = require("../config/db.js");
+const { resolveOfferAdjustedPrices, applyOfferToPrice } = require("./orderController.js");
 
 // ------------------------------------------------------------------
 // Get or create the user's cart row, return the cart id.
@@ -41,6 +42,7 @@ async function fetchCart(userId) {
        pv.compare_price,
        (pv.stock_qty > 0) AS in_stock,
        p.id            AS product_id,
+       p.category_id,
        p.name_en,
        p.name_ta,
        p.slug,
@@ -58,35 +60,56 @@ async function fetchCart(userId) {
     [userId]
   );
 
+  // Filter non-combo items to resolve their offers
+  const nonComboRows = res.rows.filter(r => !r.combo_id);
+  const pairs = nonComboRows.map(r => ({ productId: r.product_id, categoryId: r.category_id }));
+  const offerMap = await resolveOfferAdjustedPrices(db, pairs);
+
   // Informational only — authoritative combo pricing is re-resolved fresh
   // at checkout (see _createOrderCore), so this naive sum-of-variant-prices
   // subtotal intentionally does not net out combo savings. The frontend
   // groups items sharing a comboId and displays combo_price as the line
   // total instead of this per-row price.
-  const items = res.rows.map(r => ({
-    itemId: r.item_id,
-    quantity: parseInt(r.quantity),
-    variantId: r.variant_id,
-    weightLabel: r.weight_label,
-    weightGrams: r.weight_grams,
-    price: parseFloat(r.price),
-    comparePrice: r.compare_price ? parseFloat(r.compare_price) : null,
-    inStock: r.in_stock,
-    productId: r.product_id,
-    name: r.name_ta ? `${r.name_en} (${r.name_ta})` : r.name_en,
-    nameEn: r.name_en,
-    nameTa: r.name_ta,
-    slug: r.slug,
-    primaryImage: r.primary_image,
-    comboId: r.combo_id || null,
-    comboName: r.combo_name || null,
-    comboImage: r.combo_image || null,
-    comboPrice: r.combo_price != null ? parseFloat(r.combo_price) : null,
-    // Base per-combo quantity for this specific member variant (from
-    // combo_items) — lets the frontend derive "how many of this combo"
-    // as quantity / comboBaseQty for the group's shared quantity control.
-    comboBaseQty: r.combo_base_qty != null ? parseInt(r.combo_base_qty) : null,
-  }));
+  const items = res.rows.map(r => {
+    const rawPrice = parseFloat(r.price);
+    let price = rawPrice;
+    let comparePrice = r.compare_price ? parseFloat(r.compare_price) : null;
+
+    if (!r.combo_id) {
+      const offer = offerMap.get(r.product_id);
+      if (offer) {
+        price = applyOfferToPrice(rawPrice, offer);
+        if (price < rawPrice) {
+          comparePrice = r.compare_price ? parseFloat(r.compare_price) : rawPrice;
+        }
+      }
+    }
+
+    return {
+      itemId: r.item_id,
+      quantity: parseInt(r.quantity),
+      variantId: r.variant_id,
+      weightLabel: r.weight_label,
+      weightGrams: r.weight_grams,
+      price,
+      comparePrice,
+      inStock: r.in_stock,
+      productId: r.product_id,
+      name: r.name_ta ? `${r.name_en} (${r.name_ta})` : r.name_en,
+      nameEn: r.name_en,
+      nameTa: r.name_ta,
+      slug: r.slug,
+      primaryImage: r.primary_image,
+      comboId: r.combo_id || null,
+      comboName: r.combo_name || null,
+      comboImage: r.combo_image || null,
+      comboPrice: r.combo_price != null ? parseFloat(r.combo_price) : null,
+      // Base per-combo quantity for this specific member variant (from
+      // combo_items) — lets the frontend derive "how many of this combo"
+      // as quantity / comboBaseQty for the group's shared quantity control.
+      comboBaseQty: r.combo_base_qty != null ? parseInt(r.combo_base_qty) : null,
+    };
+  });
 
   const subtotal = items.reduce((s, i) => s + i.price * i.quantity, 0);
   return { items, itemCount: items.length, subtotal: parseFloat(subtotal.toFixed(2)) };

@@ -9,6 +9,15 @@ const { OFFER_MATCH_LATERAL_SQL } = require("../config/offerMatching.js");
 // ------------------------------------------------------------------
 const num = (v) => parseFloat(v) || 0;
 
+function extractRazorpayError(err) {
+  const nested = err?.error || {};
+  const code = nested.code || err?.code || null;
+  const description = nested.description || err?.description || null;
+  const statusCode = err?.statusCode || err?.status || null;
+  const message = err?.message || "Unknown error";
+  return { message, code, description, statusCode };
+}
+
 // ------------------------------------------------------------------
 // resolveOfferAdjustedPrices — batched lookup of the single best-matching
 // live product/category offer for each product id, using the exact same
@@ -49,16 +58,16 @@ async function resolveOfferAdjustedPrices(client, productCategoryPairs) {
 // view's effective_min_price computation, applied to a resolved variant price.
 // ------------------------------------------------------------------
 function applyOfferToPrice(price, offer) {
-  if (!offer) return price;
+  if (!offer) return Math.round(price);
+  let finalPrice = price;
   if (offer.offerType === "percentage") {
     const rawDiscount = (price * offer.discountValue) / 100;
     const discount = offer.maxDiscount != null ? Math.min(rawDiscount, offer.maxDiscount) : rawDiscount;
-    return Math.max(price - discount, 0);
+    finalPrice = Math.max(price - discount, 0);
+  } else if (offer.offerType === "flat") {
+    finalPrice = Math.max(price - offer.discountValue, 0);
   }
-  if (offer.offerType === "flat") {
-    return Math.max(price - offer.discountValue, 0);
-  }
-  return price;
+  return Math.round(finalPrice);
 }
 
 function formatOrder(ord, items = [], timeline = []) {
@@ -397,12 +406,12 @@ async function _createOrderCore(client, {
     memberLines.forEach((l, idx) => {
       const rowTotal = l.rawPrice * l.quantity;
       if (idx < memberLines.length - 1) {
-        const shareTotal = parseFloat((rowTotal * (group.totalPrice / individualTotal)).toFixed(2));
-        allocatedTotal += shareTotal;
-        l.finalPrice = parseFloat((shareTotal / l.quantity).toFixed(2));
+        const sharePriceRaw = (rowTotal * (group.totalPrice / individualTotal)) / l.quantity;
+        l.finalPrice = Math.round(sharePriceRaw);
+        allocatedTotal += l.finalPrice * l.quantity;
       } else {
-        const remainderTotal = parseFloat((group.totalPrice - allocatedTotal).toFixed(2));
-        l.finalPrice = parseFloat((remainderTotal / l.quantity).toFixed(2));
+        const remainderTotal = group.totalPrice - allocatedTotal;
+        l.finalPrice = Math.round(remainderTotal / l.quantity);
       }
     });
     console.log(`${tag} STEP 2b — combo "${group.name}": individualTotal=₹${individualTotal.toFixed(2)} comboPrice=₹${group.totalPrice} savings=₹${Math.max(individualTotal - group.totalPrice, 0).toFixed(2)}`);
@@ -1445,12 +1454,12 @@ async function createRazorpayOrder(req, res) {
       memberLines.forEach((l, idx) => {
         const rowTotal = l.rawPrice * l.quantity;
         if (idx < memberLines.length - 1) {
-          const shareTotal = parseFloat((rowTotal * (group.totalPrice / individualTotal)).toFixed(2));
-          allocatedTotal += shareTotal;
-          l.finalPrice = parseFloat((shareTotal / l.quantity).toFixed(2));
+          const sharePriceRaw = (rowTotal * (group.totalPrice / individualTotal)) / l.quantity;
+          l.finalPrice = Math.round(sharePriceRaw);
+          allocatedTotal += l.finalPrice * l.quantity;
         } else {
-          const remainderTotal = parseFloat((group.totalPrice - allocatedTotal).toFixed(2));
-          l.finalPrice = parseFloat((remainderTotal / l.quantity).toFixed(2));
+          const remainderTotal = group.totalPrice - allocatedTotal;
+          l.finalPrice = Math.round(remainderTotal / l.quantity);
         }
       });
     }
@@ -1587,7 +1596,9 @@ async function createRazorpayOrder(req, res) {
       keyId:    RAZORPAY_KEY_ID,
     });
   } catch (err) {
-    console.error(`[RAZORPAY CREATE-ORDER] 500 ERROR — ${err.message} userId=${userId}`);
+    const rx = extractRazorpayError(err);
+    console.error(`[RAZORPAY CREATE-ORDER] 500 ERROR — Message: ${rx.message}, Code: ${rx.code}, Description: ${rx.description}, HTTP Status: ${rx.statusCode}, userId=${userId}`);
+    console.error("[RAZORPAY CREATE-ORDER] Full Error:", err);
     console.log("=".repeat(60));
     return res.status(500).json({ success: false, message: "Failed to create payment order" });
   }
@@ -1770,24 +1781,28 @@ async function verifyRazorpayPayment(req, res) {
   } catch (err) {
     await client.query("ROLLBACK");
 
+    const rx = extractRazorpayError(err);
     // Attempt automatic refund since payment succeeded but order creation failed
     try {
-      console.log(`[RAZORPAY VERIFY] Attempting automatic refund for paymentId=${razorpay_payment_id} due to verification error: ${err.message}`);
+      console.log(`[RAZORPAY VERIFY] Attempting automatic refund for paymentId=${razorpay_payment_id} due to verification error: ${rx.message}`);
       await getRazorpayClient().payments.refund(razorpay_payment_id);
       console.log(`[RAZORPAY VERIFY] Refund successful for paymentId=${razorpay_payment_id}`);
     } catch (refundErr) {
-      console.error(`[RAZORPAY VERIFY] Refund failed for paymentId=${razorpay_payment_id}:`, refundErr.message);
+      const rxRefund = extractRazorpayError(refundErr);
+      console.error(`[RAZORPAY VERIFY] Refund failed for paymentId=${razorpay_payment_id}: Message: ${rxRefund.message}, Code: ${rxRefund.code}, Description: ${rxRefund.description}, HTTP Status: ${rxRefund.statusCode}`);
+      console.error("[RAZORPAY VERIFY] Refund error detail:", refundErr);
     }
 
     // Clean up pending record so webhook fallback doesn't trigger
     await db.query("DELETE FROM pending_razorpay_orders WHERE razorpay_order_id = $1", [razorpay_order_id]).catch(() => {});
 
     if (err.status) {
-      console.log(`[RAZORPAY VERIFY] ${err.status} ERROR — ${err.message} userId=${userId}`);
+      console.log(`[RAZORPAY VERIFY] ${err.status} ERROR — ${rx.message} userId=${userId}`);
       console.log("=".repeat(60));
       return res.status(err.status).json({ success: false, message: err.message });
     }
-    console.error(`[RAZORPAY VERIFY] 500 ERROR — ${err.message} userId=${userId}`);
+    console.error(`[RAZORPAY VERIFY] 500 ERROR — Message: ${rx.message}, Code: ${rx.code}, Description: ${rx.description}, HTTP Status: ${rx.statusCode}, userId=${userId}`);
+    console.error("[RAZORPAY VERIFY] Full Error:", err);
     console.log("=".repeat(60));
     return res.status(500).json({ success: false, message: "Internal server error" });
   } finally {
@@ -1855,6 +1870,45 @@ async function handleRazorpayWebhook(req, res) {
   } catch (_) {
     console.error("[Razorpay Webhook] Failed to parse webhook raw JSON body");
     return res.status(400).json({ success: false, message: "Invalid JSON body" });
+  }
+
+  // Handle payment.failed
+  if (event.event === "payment.failed") {
+    const rpOrderId   = event.payload?.payment?.entity?.order_id;
+    const rpPaymentId = event.payload?.payment?.entity?.id;
+    const errorCode   = event.payload?.payment?.entity?.error_code;
+    const errorDesc   = event.payload?.payment?.entity?.error_description;
+
+    console.error({
+      route: "Razorpay Webhook",
+      event: "payment.failed",
+      rpOrderId,
+      rpPaymentId,
+      errorCode,
+      errorDesc,
+    });
+
+    if (rpOrderId) {
+      const pendingRes = await db.query(
+        "SELECT * FROM pending_razorpay_orders WHERE razorpay_order_id = $1",
+        [rpOrderId]
+      );
+      if (pendingRes.rows.length > 0) {
+        const pending = pendingRes.rows[0];
+        const reason = errorDesc || errorCode || "Unknown failure reason";
+        await createNotification({
+          eventType: "payment_failed",
+          priority: "high",
+          title: "Razorpay Payment Failed",
+          message: `Payment failed for Razorpay Order ${rpOrderId} (User ID: ${pending.user_id}). Reason: ${reason}`,
+          entityType: null,
+          entityId: null,
+          link: null,
+        });
+      }
+    }
+
+    return res.status(200).json({ success: true, message: "Payment failure logged and acknowledged" });
   }
 
   // Only act on payment.captured; acknowledge all other events with 200
@@ -1939,19 +1993,31 @@ async function handleRazorpayWebhook(req, res) {
     return res.status(200).json({ success: true, message: "Order created via webhook" });
   } catch (err) {
     await client.query("ROLLBACK");
-    console.error({ route: "Razorpay Webhook", event: "payment.captured", error: err.message, rpOrderId });
+    const rx = extractRazorpayError(err);
+    console.error({
+      route: "Razorpay Webhook",
+      event: "payment.captured",
+      error: rx.message,
+      code: rx.code,
+      description: rx.description,
+      statusCode: rx.statusCode,
+      rpOrderId
+    });
+    console.error("[Razorpay Webhook] Full Error detail:", err);
 
     if (err.status === 400) {
       // Permanent validation failure — initiate refund and return 200 (done/no retry needed)
       try {
-        console.log(`[Razorpay Webhook] Permanent validation failure (status=400): ${err.message}. Initiating refund for paymentId=${rpPaymentId}`);
+        console.log(`[Razorpay Webhook] Permanent validation failure (status=400): ${rx.message}. Initiating refund for paymentId=${rpPaymentId}`);
         await getRazorpayClient().payments.refund(rpPaymentId);
         console.log(`[Razorpay Webhook] Refund successful for paymentId=${rpPaymentId}`);
         // Delete pending record so it doesn't process again
         await db.query("DELETE FROM pending_razorpay_orders WHERE razorpay_order_id = $1", [rpOrderId]).catch(() => {});
         return res.status(200).json({ success: true, message: `Validation failed: ${err.message}. Payment refunded.` });
       } catch (refundErr) {
-        console.error(`[Razorpay Webhook] Refund failed for paymentId=${rpPaymentId}:`, refundErr.message);
+        const rxRefund = extractRazorpayError(refundErr);
+        console.error(`[Razorpay Webhook] Refund failed for paymentId=${rpPaymentId}: Message: ${rxRefund.message}, Code: ${rxRefund.code}, Description: ${rxRefund.description}, HTTP Status: ${rxRefund.statusCode}`);
+        console.error("[Razorpay Webhook] Refund error detail:", refundErr);
         // Return 500 so Razorpay retries, giving us another chance to refund or alert admin
         return res.status(500).json({ success: false, message: `Validation failed but refund failed: ${refundErr.message}` });
       }
@@ -1980,4 +2046,6 @@ module.exports = {
   createRazorpayOrder,
   verifyRazorpayPayment,
   handleRazorpayWebhook,
+  resolveOfferAdjustedPrices,
+  applyOfferToPrice,
 };

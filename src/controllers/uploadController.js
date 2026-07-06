@@ -1,19 +1,25 @@
 const multer = require("multer");
-const { uploadToSupabase, deleteFromSupabase } = require("../config/supabase.js");
+const {
+  uploadToSupabase,
+  deleteFromSupabase,
+} = require("../config/supabase.js");
 
 const BANNER_TYPES = new Set([
-  "video/mp4", "video/webm", "video/ogg",
-  "image/jpeg", "image/png", "image/webp", "image/gif",
+  "video/mp4",
+  "video/webm",
+  "video/ogg",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/gif",
 ]);
 
-const IMAGE_TYPES = new Set([
-  "image/jpeg", "image/png", "image/webp",
-]);
+const IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 
-// 100 MB limit for banners (videos)
+// 20 MB limit for banners (videos and images)
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 100 * 1024 * 1024 },
+  limits: { fileSize: 20 * 1024 * 1024 },
   fileFilter: (_req, file, cb) =>
     BANNER_TYPES.has(file.mimetype)
       ? cb(null, true)
@@ -51,20 +57,35 @@ const uploadReview = multer({
 async function uploadBannerFile(req, res) {
   const { file } = req;
   if (!file) {
-    return res.status(400).json({ success: false, message: "No file provided" });
+    return res
+      .status(400)
+      .json({ success: false, message: "No file provided" });
   }
 
-  console.log({ route: "POST /api/upload/banner", file: file.originalname, size: file.size });
+  console.log({
+    route: "POST /api/upload/banner",
+    file: file.originalname,
+    size: file.size,
+  });
 
   try {
-    const url = await uploadToSupabase(file.buffer, file.mimetype, file.originalname);
+    const url = await uploadToSupabase(
+      file.buffer,
+      file.mimetype,
+      file.originalname,
+    );
     console.log({ route: "POST /api/upload/banner", status: 200, url });
     return res.status(200).json({ success: true, url });
   } catch (err) {
-    const isSupabaseError = err.message && err.message.includes("Storage upload failed");
+    const isSupabaseError =
+      err.message && err.message.includes("Storage upload failed");
     const statusCode = isSupabaseError ? 502 : 500;
     const msg = isSupabaseError ? err.message : "Internal server error";
-    console.error({ route: "POST /api/upload/banner", status: statusCode, error: err.message });
+    console.error({
+      route: "POST /api/upload/banner",
+      status: statusCode,
+      error: err.message,
+    });
     return res.status(statusCode).json({ success: false, message: msg });
   }
 }
@@ -81,23 +102,45 @@ async function uploadProductImage(req, res) {
   const slug = (req.body.slug || "").trim();
 
   if (!file) {
-    return res.status(400).json({ success: false, message: "No file provided" });
+    return res
+      .status(400)
+      .json({ success: false, message: "No file provided" });
   }
   if (!slug) {
-    return res.status(400).json({ success: false, message: "slug is required to know which product folder to upload into" });
+    return res
+      .status(400)
+      .json({
+        success: false,
+        message: "slug is required to know which product folder to upload into",
+      });
   }
 
-  console.log({ route: "POST /api/upload/product", slug, file: file.originalname, size: file.size });
+  console.log({
+    route: "POST /api/upload/product",
+    slug,
+    file: file.originalname,
+    size: file.size,
+  });
 
   try {
-    const url = await uploadToSupabase(file.buffer, file.mimetype, file.originalname, `product/${slug}`);
+    const url = await uploadToSupabase(
+      file.buffer,
+      file.mimetype,
+      file.originalname,
+      `product/${slug}`,
+    );
     console.log({ route: "POST /api/upload/product", status: 200, url });
     return res.status(200).json({ success: true, url });
   } catch (err) {
-    const isSupabaseError = err.message && err.message.includes("Storage upload failed");
+    const isSupabaseError =
+      err.message && err.message.includes("Storage upload failed");
     const statusCode = isSupabaseError ? 502 : 500;
     const msg = isSupabaseError ? err.message : "Internal server error";
-    console.error({ route: "POST /api/upload/product", status: statusCode, error: err.message });
+    console.error({
+      route: "POST /api/upload/product",
+      status: statusCode,
+      error: err.message,
+    });
     return res.status(statusCode).json({ success: false, message: msg });
   }
 }
@@ -115,23 +158,46 @@ async function uploadReviewImage(req, res) {
   const slug = (req.body.slug || "").trim();
 
   if (!file) {
-    return res.status(400).json({ success: false, message: "No file provided" });
+    return res
+      .status(400)
+      .json({ success: false, message: "No file provided" });
   }
   if (!slug) {
-    return res.status(400).json({ success: false, message: "slug is required to know which product folder to upload into" });
+    return res
+      .status(400)
+      .json({
+        success: false,
+        message: "slug is required to know which product folder to upload into",
+      });
   }
 
-  console.log({ route: "POST /api/upload/review-image", slug, userId: req.user?.id, file: file.originalname, size: file.size });
+  console.log({
+    route: "POST /api/upload/review-image",
+    slug,
+    userId: req.user?.id,
+    file: file.originalname,
+    size: file.size,
+  });
 
   try {
-    const url = await uploadToSupabase(file.buffer, file.mimetype, file.originalname, `review/${slug}`);
+    const url = await uploadToSupabase(
+      file.buffer,
+      file.mimetype,
+      file.originalname,
+      `review/${slug}`,
+    );
     console.log({ route: "POST /api/upload/review-image", status: 200, url });
     return res.status(200).json({ success: true, url });
   } catch (err) {
-    const isSupabaseError = err.message && err.message.includes("Storage upload failed");
+    const isSupabaseError =
+      err.message && err.message.includes("Storage upload failed");
     const statusCode = isSupabaseError ? 502 : 500;
     const msg = isSupabaseError ? err.message : "Internal server error";
-    console.error({ route: "POST /api/upload/review-image", status: statusCode, error: err.message });
+    console.error({
+      route: "POST /api/upload/review-image",
+      status: statusCode,
+      error: err.message,
+    });
     return res.status(statusCode).json({ success: false, message: msg });
   }
 }
@@ -152,11 +218,27 @@ async function deleteUploadedFile(req, res) {
   try {
     await deleteFromSupabase(url);
     console.log({ route: "DELETE /api/upload/delete-file", status: 200, url });
-    return res.status(200).json({ success: true, message: "File deleted successfully" });
+    return res
+      .status(200)
+      .json({ success: true, message: "File deleted successfully" });
   } catch (err) {
-    console.error({ route: "DELETE /api/upload/delete-file", status: 500, error: err.message });
-    return res.status(500).json({ success: false, message: "Failed to delete file" });
+    console.error({
+      route: "DELETE /api/upload/delete-file",
+      status: 500,
+      error: err.message,
+    });
+    return res
+      .status(500)
+      .json({ success: false, message: "Failed to delete file" });
   }
 }
 
-module.exports = { upload, uploadProduct, uploadReview, uploadBannerFile, uploadProductImage, uploadReviewImage, deleteUploadedFile };
+module.exports = {
+  upload,
+  uploadProduct,
+  uploadReview,
+  uploadBannerFile,
+  uploadProductImage,
+  uploadReviewImage,
+  deleteUploadedFile,
+};
