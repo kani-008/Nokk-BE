@@ -498,13 +498,26 @@ async function deleteCombo(req, res) {
     return res.status(400).json({ success: false, message: "id is required" });
   }
   try {
+    const imgRes = await db.query(
+      "SELECT image_url FROM combo_images WHERE combo_id = $1",
+      [id]
+    );
+
     const result = await db.query(`DELETE FROM combos WHERE id = $1 RETURNING id`, [id]);
     if (result.rows.length === 0) {
       console.log({ route: "DELETE /api/combos/delete-combo", comboId: id, status: 404, message: "Combo not found" });
       return res.status(404).json({ success: false, message: "Combo not found" });
     }
+
+    if (imgRes.rows.length > 0) {
+      const urls = imgRes.rows.map(r => r.image_url);
+      Promise.all(urls.map(url => deleteFromSupabase(url))).catch(err => {
+        console.warn(`[Supabase] async bulk delete failed for combo ${id}: ${err.message}`);
+      });
+    }
+
     console.log({ route: "DELETE /api/combos/delete-combo", comboId: id, status: 200 });
-    return res.json({ success: true, message: "Combo deleted" });
+    return res.status(200).json({ success: true, message: "Combo deleted" });
   } catch (err) {
     console.error({ route: "DELETE /api/combos/delete-combo", comboId: id, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });

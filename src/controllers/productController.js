@@ -711,7 +711,7 @@ async function deleteProduct(req, res) {
     }
 
     console.log({ route: "DELETE /api/products/delete-product", productId: id, status: 200 });
-    return res.json({ success: true, message: "Product deactivated (soft delete — order history preserved) and images cleared" });
+    return res.status(200).json({ success: true, message: "Product deactivated (soft delete — order history preserved) and images cleared" });
   } catch (err) {
     await client.query("ROLLBACK");
     console.error({ route: "DELETE /api/products/delete-product", productId: id, status: 500, error: err.message });
@@ -810,7 +810,7 @@ async function deleteVariant(req, res) {
       return res.status(404).json({ success: false, message: "Variant not found" });
     }
     console.log({ route: "DELETE /api/products/delete-variant", productId: id, variantId, status: 200 });
-    return res.json({ success: true, message: "Variant deleted successfully" });
+    return res.status(200).json({ success: true, message: "Variant deleted successfully" });
   } catch (err) {
     if (err.code === "23503") {
       console.log({ route: "DELETE /api/products/delete-variant", productId: id, variantId, status: 200, info: "foreign key constraint violation, soft-deactivating variant instead" });
@@ -822,7 +822,7 @@ async function deleteVariant(req, res) {
         if (softDelRes.rows.length === 0) {
           return res.status(404).json({ success: false, message: "Variant not found" });
         }
-        return res.json({ success: true, message: "Variant cannot be hard deleted due to order history; deactivated instead" });
+        return res.status(200).json({ success: true, message: "Variant cannot be hard deleted due to order history; deactivated instead" });
       } catch (softErr) {
         console.error({ route: "DELETE /api/products/delete-variant", productId: id, variantId, status: 500, error: softErr.message });
         return res.status(500).json({ success: false, message: "Internal server error" });
@@ -974,7 +974,7 @@ async function deleteImage(req, res) {
       console.warn(`[Supabase] async delete failed for "${result.rows[0].image_url}": ${err.message}`);
     });
     console.log({ route: "DELETE /api/products/delete-image", productId: id, imageId, status: 200 });
-    return res.json({ success: true, message: "Image deleted" });
+    return res.status(200).json({ success: true, message: "Image deleted" });
   } catch (err) {
     console.error({ route: "DELETE /api/products/delete-image", productId: id, imageId, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });

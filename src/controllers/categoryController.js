@@ -146,7 +146,7 @@ async function createCategory(req, res) {
 // Update a category — any field.
 // ==================================================================
 async function updateCategory(req, res) {
-  let { id, nameEn, nameTa, slug, description, imageUrl, sortOrder, isActive } = req.body;
+  let { id, nameEn, nameTa, slug, description, imageUrl, sortOrder, isActive, removeImage } = req.body;
   console.log({ route: "PUT /api/categories/update-category", categoryId: id });
 
   try {
@@ -172,13 +172,15 @@ async function updateCategory(req, res) {
       }
     }
 
+    const isRemovingImage = removeImage === 'true' || removeImage === true;
+
     const result = await db.query(
       `UPDATE categories SET
          name_en     = COALESCE($1, name_en),
          name_ta     = COALESCE($2, name_ta),
          slug        = COALESCE($3, slug),
          description = COALESCE($4, description),
-         image_url   = COALESCE($5, image_url),
+         image_url   = CASE WHEN $9 = TRUE THEN NULL ELSE COALESCE($5, image_url) END,
          sort_order  = COALESCE($6, sort_order),
          is_active   = COALESCE($7, is_active),
          updated_at  = NOW()
@@ -192,11 +194,12 @@ async function updateCategory(req, res) {
         imageUrl !== undefined ? imageUrl : null,
         sortOrder !== undefined ? sortOrder : null,
         isActive !== undefined ? isActive : null,
-        id
+        id,
+        isRemovingImage
       ]
     );
 
-    if (imageUrl && oldImageUrl && imageUrl !== oldImageUrl) {
+    if ((isRemovingImage || (imageUrl && imageUrl !== oldImageUrl)) && oldImageUrl) {
       await deleteFromSupabase(oldImageUrl);
     }
 
@@ -236,7 +239,7 @@ async function deleteCategory(req, res) {
     }
     await deleteFromSupabase(result.rows[0].image_url);
     console.log({ route: "DELETE /api/categories/delete-category", categoryId: id, status: 200 });
-    return res.json({ success: true, message: "Category deleted" });
+    return res.status(200).json({ success: true, message: "Category deleted" });
   } catch (err) {
     console.error({ route: "DELETE /api/categories/delete-category", categoryId: id, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });

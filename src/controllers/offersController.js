@@ -720,7 +720,7 @@ async function deleteOffer(req, res) {
     }
 
     console.log({ route: "DELETE /api/offers/delete-offer", offerId: id, status: 200 });
-    return res.json({ success: true, message: "Offer deleted" });
+    return res.status(200).json({ success: true, message: "Offer deleted" });
   } catch (err) {
     console.error({ route: "DELETE /api/offers/delete-offer", offerId: id, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
