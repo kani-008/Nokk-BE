@@ -325,8 +325,9 @@ async function createOffer(req, res) {
       `INSERT INTO offers
          (name, description, discount_value, product_id, category_id,
           min_order_value, max_discount, start_date, end_date, is_active,
-          offer_type, applies_to, image_url, show_as_banner, show_in_announcement)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+          offer_type, applies_to, image_url, show_as_banner, show_in_announcement,
+          banner_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
        RETURNING *`,
       [
         name.trim(),
@@ -343,7 +344,8 @@ async function createOffer(req, res) {
         applies,
         imageUrl,
         finalShowAsBanner,
-        finalShowInAnnouncement
+        finalShowInAnnouncement,
+        finalBannerId
       ]
     );
 
@@ -367,9 +369,9 @@ async function createOffer(req, res) {
       // 1. Link to existing Banner + Slide text overlay
       if (finalShowAsBanner && finalBannerId) {
         await db.query(
-          `INSERT INTO btext (banner_id, heading, subtext, is_active)
-           VALUES ($1, $2, $3, $4)`,
-          [finalBannerId, textInfo.heading, textInfo.subtext, newOffer.is_active]
+          `INSERT INTO btext (banner_id, heading, subtext, is_active, linked_offer_id)
+           VALUES ($1, $2, $3, $4, $5)`,
+          [finalBannerId, textInfo.heading, textInfo.subtext, newOffer.is_active, newOffer.id]
         );
         await db.query(
           `UPDATE banners SET linked_offer_id = $1, updated_at = NOW() WHERE id = $2`,
@@ -542,8 +544,9 @@ async function updateOffer(req, res) {
          image_url       = $13,
          show_as_banner  = $14,
          show_in_announcement = $15,
+         banner_id       = $16,
          updated_at      = NOW()
-       WHERE id = $16
+       WHERE id = $17
        RETURNING *`,
       [
         finalName,
@@ -561,6 +564,7 @@ async function updateOffer(req, res) {
         finalImageUrl,
         finalShowAsBanner,
         finalShowInAnnouncement,
+        finalBannerId,
         id
       ]
     );
@@ -590,8 +594,8 @@ async function updateOffer(req, res) {
         if (oldBannerId === finalBannerId) {
           // Sync overlay text in place
           const autoBtextRes = await db.query(
-            `SELECT bt_id FROM btext WHERE banner_id = $1 ORDER BY bt_id ASC LIMIT 1`,
-            [finalBannerId]
+            `SELECT bt_id FROM btext WHERE banner_id = $1 AND linked_offer_id = $2 LIMIT 1`,
+            [finalBannerId, updatedOffer.id]
           );
           const autoBtextId = autoBtextRes.rows[0]?.bt_id;
           if (autoBtextId) {
@@ -601,9 +605,9 @@ async function updateOffer(req, res) {
             );
           } else {
             await db.query(
-              `INSERT INTO btext (banner_id, heading, subtext, is_active)
-               VALUES ($1, $2, $3, $4)`,
-              [finalBannerId, textInfo.heading, textInfo.subtext, updatedOffer.is_active]
+              `INSERT INTO btext (banner_id, heading, subtext, is_active, linked_offer_id)
+               VALUES ($1, $2, $3, $4, $5)`,
+              [finalBannerId, textInfo.heading, textInfo.subtext, updatedOffer.is_active, updatedOffer.id]
             );
           }
           // Also sync active state and content metadata of the banner itself
@@ -614,14 +618,10 @@ async function updateOffer(req, res) {
         } else {
           // Banner selection changed: detach from old banner
           if (oldBannerId) {
-            const oldBtextRes = await db.query(
-              `SELECT bt_id FROM btext WHERE banner_id = $1 ORDER BY bt_id ASC LIMIT 1`,
-              [oldBannerId]
+            await db.query(
+              `DELETE FROM btext WHERE banner_id = $1 AND linked_offer_id = $2`,
+              [oldBannerId, updatedOffer.id]
             );
-            const oldBtextId = oldBtextRes.rows[0]?.bt_id;
-            if (oldBtextId) {
-              await db.query(`DELETE FROM btext WHERE bt_id = $1`, [oldBtextId]);
-            }
             await db.query(
               `UPDATE banners SET linked_offer_id = NULL, updated_at = NOW() WHERE id = $1`,
               [oldBannerId]
@@ -629,9 +629,9 @@ async function updateOffer(req, res) {
           }
           // Attach to new banner
           await db.query(
-            `INSERT INTO btext (banner_id, heading, subtext, is_active)
-             VALUES ($1, $2, $3, $4)`,
-            [finalBannerId, textInfo.heading, textInfo.subtext, updatedOffer.is_active]
+            `INSERT INTO btext (banner_id, heading, subtext, is_active, linked_offer_id)
+             VALUES ($1, $2, $3, $4, $5)`,
+            [finalBannerId, textInfo.heading, textInfo.subtext, updatedOffer.is_active, updatedOffer.id]
           );
           await db.query(
             `UPDATE banners SET linked_offer_id = $1, title = $2, subtitle = $3, is_active = $4, updated_at = NOW() WHERE id = $5`,
@@ -641,14 +641,10 @@ async function updateOffer(req, res) {
       } else {
         // Toggled off or deselected: clean up link
         if (oldBannerId) {
-          const oldBtextRes = await db.query(
-            `SELECT bt_id FROM btext WHERE banner_id = $1 ORDER BY bt_id ASC LIMIT 1`,
-            [oldBannerId]
+          await db.query(
+            `DELETE FROM btext WHERE banner_id = $1 AND linked_offer_id = $2`,
+            [oldBannerId, updatedOffer.id]
           );
-          const oldBtextId = oldBtextRes.rows[0]?.bt_id;
-          if (oldBtextId) {
-            await db.query(`DELETE FROM btext WHERE bt_id = $1`, [oldBtextId]);
-          }
           await db.query(
             `UPDATE banners SET linked_offer_id = NULL, updated_at = NOW() WHERE id = $1`,
             [oldBannerId]
