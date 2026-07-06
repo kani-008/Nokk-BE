@@ -1114,8 +1114,50 @@ async function getSimilarProductsMulti(req, res) {
   }
 }
 
+// ==================================================================
+// PUBLIC/ADMIN — GET /api/products/search-suggestions
+// Minimal endpoint returning light suggestions for autocomplete dropdown.
+// Query: ?q=queryText
+// ==================================================================
+async function getProductSuggestions(req, res) {
+  const query = req.query.q || "";
+  console.log({ route: "GET /api/products/search-suggestions", query, status: "fetching suggestions" });
+
+  if (!query || query.trim().length < 2) {
+    return res.json({ success: true, suggestions: [] });
+  }
+
+  const searchTerm = query.trim();
+
+  try {
+    const result = await db.query(
+      `SELECT id, name_en, name_ta, slug, primary_image, min_price, avg_rating
+       FROM v_products_with_price
+       WHERE is_active = TRUE
+         AND (name_en ILIKE $1 OR name_ta ILIKE $1 OR description ILIKE $1)
+       ORDER BY avg_rating DESC, name_en ASC
+       LIMIT 8`,
+      [`%${searchTerm}%`]
+    );
+
+    const suggestions = result.rows.map((row) => ({
+      id: row.id,
+      name: row.name_ta ? `${row.name_en} (${row.name_ta})` : row.name_en,
+      slug: row.slug,
+      primaryImage: row.primary_image || null,
+      minPrice: num(row.min_price),
+    }));
+
+    return res.json({ success: true, suggestions });
+  } catch (err) {
+    console.error({ route: "GET /api/products/search-suggestions", error: err.message });
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+}
+
 module.exports = {
   getAllProducts, getProductBySlug, getWeightLabels, getSimilarProducts, getSimilarProductsMulti,
+  getProductSuggestions,
   createProduct, updateProduct, deleteProduct,
   addVariant, updateVariant, deleteVariant,
   addImage, addImages, deleteImage
