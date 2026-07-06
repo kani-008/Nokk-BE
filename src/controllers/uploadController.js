@@ -16,10 +16,10 @@ const BANNER_TYPES = new Set([
 
 const IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 
-// 100 MB limit for banners (videos)
+// 20 MB limit for banners (videos and images)
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 100 * 1024 * 1024 },
+  limits: { fileSize: 20 * 1024 * 1024 },
   fileFilter: (_req, file, cb) =>
     BANNER_TYPES.has(file.mimetype)
       ? cb(null, true)
