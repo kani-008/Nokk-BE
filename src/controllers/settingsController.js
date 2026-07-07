@@ -81,6 +81,12 @@ async function updateSettings(req, res) {
         return res.status(400).json({ success: false, message: "Page Background Colour (bgColor) must be a valid hex color" });
       }
     }
+    if (["primaryColor", "backgroundColor", "surfaceColor", "textColor"].includes(key) && value) {
+      if (!/^#?([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(String(value).trim())) {
+        const friendlyName = key.replace(/([A-Z])/g, " $1").replace(/^./, (str) => str.toUpperCase());
+        return res.status(400).json({ success: false, message: `${friendlyName} (${key}) must be a valid hex color` });
+      }
+    }
   }
 
   const client = await db.getClient();
