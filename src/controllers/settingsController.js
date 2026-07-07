@@ -71,6 +71,16 @@ async function updateSettings(req, res) {
         return res.status(400).json({ success: false, message: "Max Items per Cart (maxCartItems) must be an integer greater than or equal to 1" });
       }
     }
+    if (key === "themeColor" && value) {
+      if (!/^#?([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(String(value).trim())) {
+        return res.status(400).json({ success: false, message: "Brand / Accent Colour (themeColor) must be a valid hex color" });
+      }
+    }
+    if (key === "bgColor" && value) {
+      if (!/^#?([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(String(value).trim())) {
+        return res.status(400).json({ success: false, message: "Page Background Colour (bgColor) must be a valid hex color" });
+      }
+    }
   }
 
   const client = await db.getClient();

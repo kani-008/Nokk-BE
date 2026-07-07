@@ -1091,7 +1091,7 @@ async function googleLogin(req, res) {
 // POST /google-link-confirm   -> googleLinkConfirm
 // Body: { credential, password }
 // Confirms a Google sign-in attempt against an existing password
-// account with the same email, without changing auth_provider.
+// account with the same email, updating auth_provider to 'google'.
 // ==================================================================
 async function googleLinkConfirm(req, res) {
   const { credential, password } = req.body;
@@ -1139,14 +1139,20 @@ async function googleLinkConfirm(req, res) {
     let user2 = user;
     if (user.status === "deactivated") {
       // Password confirmed: reactivate as part of this same successful
-      // link-confirm, mirroring reactivate()'s behavior. Keeps the security
-      // bar consistent (password required wherever one exists) while still
-      // giving this email/password account a path back in via Google.
+      // link-confirm, mirroring reactivate()'s behavior. Also set auth_provider to 'google'
+      // to record the successful Google link.
       const reactivateRes = await db.query(
-        "UPDATE users SET status = 'active', updated_at = NOW() WHERE id = $1 RETURNING *",
+        "UPDATE users SET status = 'active', auth_provider = 'google', updated_at = NOW() WHERE id = $1 RETURNING *",
         [user.id],
       );
       user2 = reactivateRes.rows[0];
+    } else {
+      // Unconditionally set auth_provider to 'google' to record successful Google link.
+      const updateRes = await db.query(
+        "UPDATE users SET auth_provider = 'google', updated_at = NOW() WHERE id = $1 RETURNING *",
+        [user.id],
+      );
+      user2 = updateRes.rows[0];
     }
 
     const accessToken = signAccessToken(user2);
