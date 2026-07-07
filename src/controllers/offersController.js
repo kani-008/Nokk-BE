@@ -1,5 +1,5 @@
 const db = require("../config/db.js");
-const { uploadToSupabase, deleteFromSupabase } = require("../config/supabase.js");
+const { uploadToImageKit, deleteFromImageKit } = require("../config/imagekit.js");
 
 async function updateSettingValue(key, value) {
   await db.query(
@@ -716,7 +716,7 @@ async function deleteOffer(req, res) {
 
     const deletedOffer = result.rows[0];
     if (deletedOffer.image_url) {
-      await deleteFromSupabase(deletedOffer.image_url);
+      await deleteFromImageKit(deletedOffer.image_url);
     }
 
     console.log({ route: "DELETE /api/offers/delete-offer", offerId: id, status: 200 });

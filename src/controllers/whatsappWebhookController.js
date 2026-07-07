@@ -71,19 +71,19 @@ function receiveWebhook(req, res) {
 
 /**
  * Handles POST /api/whatsapp/test-send
- * Admin-only utility to manually test message sending.
+ * Admin-only utility to manually test OTP template delivery.
  */
 async function testSend(req, res) {
-  const { phone, message } = req.body;
-  if (!phone || !message) {
-    return res.status(400).json({ success: false, message: "phone and message are required" });
+  const { phone, otp } = req.body;
+  if (!phone || !otp) {
+    return res.status(400).json({ success: false, message: "phone and otp are required" });
   }
 
   try {
-    const messageId = await sendWhatsAppTemplate(phone, message);
+    const messageId = await sendWhatsAppTemplate(phone, otp);
     return res.json({
       success: true,
-      message: "Test message sent successfully",
+      message: "Test OTP template sent successfully",
       messageId,
     });
   } catch (error) {

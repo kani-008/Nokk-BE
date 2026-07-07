@@ -1,8 +1,8 @@
 const db = require("../config/db.js");
 const {
-  uploadToSupabase,
-  deleteFromSupabase,
-} = require("../config/supabase.js");
+  uploadToImageKit,
+  deleteFromImageKit,
+} = require("../config/imagekit.js");
 
 // Convert legacy signed URLs to public URLs (signing-key rotation recovery)
 function toPublicUrl(url) {
@@ -108,7 +108,7 @@ async function createBanner(req, res) {
   try {
     if (req.files?.imageFile?.[0]) {
       const f = req.files.imageFile[0];
-      imageUrl = await uploadToSupabase(
+      imageUrl = await uploadToImageKit(
         f.buffer,
         f.mimetype,
         f.originalname,
@@ -117,7 +117,7 @@ async function createBanner(req, res) {
     }
     if (req.files?.videoFile?.[0]) {
       const f = req.files.videoFile[0];
-      videoUrl = await uploadToSupabase(
+      videoUrl = await uploadToImageKit(
         f.buffer,
         f.mimetype,
         f.originalname,
@@ -198,7 +198,7 @@ async function updateBanner(req, res) {
 
     if (req.files?.imageFile?.[0]) {
       const f = req.files.imageFile[0];
-      imageUrl = await uploadToSupabase(
+      imageUrl = await uploadToImageKit(
         f.buffer,
         f.mimetype,
         f.originalname,
@@ -207,7 +207,7 @@ async function updateBanner(req, res) {
     }
     if (req.files?.videoFile?.[0]) {
       const f = req.files.videoFile[0];
-      videoUrl = await uploadToSupabase(
+      videoUrl = await uploadToImageKit(
         f.buffer,
         f.mimetype,
         f.originalname,
@@ -236,10 +236,10 @@ async function updateBanner(req, res) {
 
     // Delete old Supabase files only if they were actually replaced
     if (imageUrl && oldImageUrl && imageUrl !== oldImageUrl) {
-      await deleteFromSupabase(oldImageUrl);
+      await deleteFromImageKit(oldImageUrl);
     }
     if (videoUrl && oldVideoUrl && videoUrl !== oldVideoUrl) {
-      await deleteFromSupabase(oldVideoUrl);
+      await deleteFromImageKit(oldVideoUrl);
     }
 
     console.log({
@@ -293,8 +293,8 @@ async function deleteBanner(req, res) {
 
     const { image_url, video_url } = result.rows[0];
     await Promise.allSettled([
-      deleteFromSupabase(image_url),
-      deleteFromSupabase(video_url),
+      deleteFromImageKit(image_url),
+      deleteFromImageKit(video_url),
     ]);
 
     console.log({

@@ -1,5 +1,5 @@
 const db = require("../config/db.js");
-const { uploadToSupabase, deleteFromSupabase } = require("../config/supabase.js");
+const { uploadToImageKit, deleteFromImageKit } = require("../config/imagekit.js");
 const { fetchReviewsForProduct } = require("./reviewController.js");
 
 // ------------------------------------------------------------------
@@ -700,8 +700,8 @@ async function updateProduct(req, res) {
         );
         // Delete files from Supabase Storage asynchronously
         const urlsToDelete = imgsToDelete.map(img => img.image_url);
-        Promise.all(urlsToDelete.map(url => deleteFromSupabase(url))).catch(err => {
-          console.warn(`[Supabase] async delete failed during update of product ${id}: ${err.message}`);
+        Promise.all(urlsToDelete.map(url => deleteFromImageKit(url))).catch(err => {
+          console.warn(`[ImageKit] async delete failed during update of product ${id}: ${err.message}`);
         });
       }
 
@@ -793,8 +793,8 @@ async function deleteProduct(req, res) {
     // Asynchronously delete files from Supabase Storage (non-blocking)
     if (imgRes.rows.length > 0) {
       const urls = imgRes.rows.map(r => r.image_url);
-      Promise.all(urls.map(url => deleteFromSupabase(url))).catch(err => {
-        console.warn(`[Supabase] async bulk delete failed for product ${id}: ${err.message}`);
+      Promise.all(urls.map(url => deleteFromImageKit(url))).catch(err => {
+        console.warn(`[ImageKit] async bulk delete failed for product ${id}: ${err.message}`);
       });
     }
 
@@ -940,7 +940,7 @@ async function addImage(req, res) {
       if (prodRes.rows.length === 0) {
         return res.status(404).json({ success: false, message: "Product not found" });
       }
-      imageUrl = await uploadToSupabase(req.file.buffer, req.file.mimetype, req.file.originalname, `product/${prodRes.rows[0].slug}`);
+      imageUrl = await uploadToImageKit(req.file.buffer, req.file.mimetype, req.file.originalname, `product/${prodRes.rows[0].slug}`);
     }
 
     if (!imageUrl) {
@@ -1012,7 +1012,7 @@ async function addImages(req, res) {
 
     // Upload all files to Supabase in parallel: product/{slug}/{filename}
     const uploadedUrls = await Promise.all(
-      files.map(f => uploadToSupabase(f.buffer, f.mimetype, f.originalname, `product/${slug}`))
+      files.map(f => uploadToImageKit(f.buffer, f.mimetype, f.originalname, `product/${slug}`))
     );
 
     const insertedImages = [];
@@ -1034,9 +1034,9 @@ async function addImages(req, res) {
     console.log({ route: "POST /api/products/add-images", productId: id, status: 201, count: insertedImages.length });
     return res.status(201).json({ success: true, message: `${insertedImages.length} image(s) added`, images: insertedImages });
   } catch (err) {
-    const isSupabaseError = err.message && err.message.includes("Storage upload failed");
-    const statusCode = isSupabaseError ? 502 : 500;
-    const msg = isSupabaseError ? err.message : "Internal server error";
+    const isImageKitError = err.message && err.message.includes("ImageKit upload failed");
+    const statusCode = isImageKitError ? 502 : 500;
+    const msg = isImageKitError ? err.message : "Internal server error";
     console.error({ route: "POST /api/products/add-images", productId: id, status: statusCode, error: err.message });
     return res.status(statusCode).json({ success: false, message: msg });
   }
@@ -1058,8 +1058,8 @@ async function deleteImage(req, res) {
       return res.status(404).json({ success: false, message: "Image not found" });
     }
     // Delete from Supabase asynchronously to prevent API response delays
-    deleteFromSupabase(result.rows[0].image_url).catch(err => {
-      console.warn(`[Supabase] async delete failed for "${result.rows[0].image_url}": ${err.message}`);
+    deleteFromImageKit(result.rows[0].image_url).catch(err => {
+      console.warn(`[ImageKit] async delete failed for "${result.rows[0].image_url}": ${err.message}`);
     });
     console.log({ route: "DELETE /api/products/delete-image", productId: id, imageId, status: 200 });
     return res.status(200).json({ success: true, message: "Image deleted" });
