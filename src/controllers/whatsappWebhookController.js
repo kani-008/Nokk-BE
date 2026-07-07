@@ -1,4 +1,4 @@
-const { sendWhatsAppText } = require("../services/whatsappService.js");
+const { sendWhatsAppTemplate } = require("../services/whatsappService.js");
 
 /**
  * Handles GET /api/whatsapp/webhook
@@ -80,7 +80,7 @@ async function testSend(req, res) {
   }
 
   try {
-    const messageId = await sendWhatsAppText(phone, message);
+    const messageId = await sendWhatsAppTemplate(phone, message);
     return res.json({
       success: true,
       message: "Test message sent successfully",

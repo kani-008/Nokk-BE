@@ -4,6 +4,7 @@ const bcrypt = require("bcryptjs");
 
 const WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
 const WHATSAPP_ACCESS_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN;
+const OTP_TEMPLATE = process.env.WHATSAPP_OTP_TEMPLATE;
 
 if (!WHATSAPP_PHONE_NUMBER_ID || !WHATSAPP_ACCESS_TOKEN) {
   throw new Error(
@@ -11,7 +12,7 @@ if (!WHATSAPP_PHONE_NUMBER_ID || !WHATSAPP_ACCESS_TOKEN) {
   );
 }
 
-const WHATSAPP_API_URL = `https://graph.facebook.com/v21.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
+const WHATSAPP_API_URL = `https://graph.facebook.com/v25.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
 
 /**
  * Normalizes a phone number to E.164 without '+'
@@ -30,15 +31,15 @@ function normalizePhoneNumber(phone) {
 }
 
 /**
- * Sends a plaintext WhatsApp message to a phone number using Meta Cloud API
+ * Sends a template WhatsApp message to a phone number using Meta Cloud API
  */
-async function sendWhatsAppText(toPhone, bodyText) {
+async function sendWhatsAppTemplate(toPhone, otp) {
   const normalizedPhone = normalizePhoneNumber(toPhone);
 
   if (process.env.NODE_ENV !== "production") {
-    console.log(`[WhatsApp Service] Sending message to ${normalizedPhone}: "${bodyText}"`);
+    console.log(`[WhatsApp Service] Sending template message to ${normalizedPhone} with OTP: "${otp}"`);
   } else {
-    console.log(`[WhatsApp Service] Sending message to ${normalizedPhone}`);
+    console.log(`[WhatsApp Service] Sending template message to ${normalizedPhone}`);
   }
 
   try {
@@ -47,9 +48,23 @@ async function sendWhatsAppText(toPhone, bodyText) {
       {
         messaging_product: "whatsapp",
         to: normalizedPhone,
-        type: "text",
-        text: {
-          body: bodyText,
+        type: "template",
+        template: {
+          name: OTP_TEMPLATE,
+          language: {
+            code: "en_US",
+          },
+          components: [
+            {
+              type: "body",
+              parameters: [
+                {
+                  type: "text",
+                  text: String(otp),
+                },
+              ],
+            },
+          ],
         },
       },
       {
@@ -88,11 +103,8 @@ async function generateAndSendOtp(phone) {
   // Hash it
   const otpHash = await bcrypt.hash(otp, 10);
   
-  // Compose message
-  const message = `Your Namma Oor Karuvattu Kadai OTP is ${otp}. Valid for 10 minutes. Do not share this with anyone.`;
-  
-  // Send via WhatsApp
-  const messageId = await sendWhatsAppText(phone, message);
+  // Send via WhatsApp template
+  const messageId = await sendWhatsAppTemplate(phone, otp);
   
   return { otpHash, messageId };
 }
@@ -113,7 +125,7 @@ async function verifyOtpHash(plainOtp, storedHash) {
 }
 
 module.exports = {
-  sendWhatsAppText,
+  sendWhatsAppTemplate,
   generateAndSendOtp,
   verifyOtpHash,
 };
