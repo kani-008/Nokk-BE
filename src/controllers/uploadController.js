@@ -203,6 +203,48 @@ async function uploadReviewImage(req, res) {
 }
 
 // ==================================================================
+// ADMIN — POST /api/upload/customer-video
+// Multipart fields: file (required)
+// Response: { success, url }
+// ==================================================================
+async function uploadCustomerVideoFile(req, res) {
+  const { file } = req;
+  if (!file) {
+    return res
+      .status(400)
+      .json({ success: false, message: "No file provided" });
+  }
+
+  console.log({
+    route: "POST /api/upload/customer-video",
+    file: file.originalname,
+    size: file.size,
+  });
+
+  try {
+    const url = await uploadToImageKit(
+      file.buffer,
+      file.mimetype,
+      file.originalname,
+      "customer-videos"
+    );
+    console.log({ route: "POST /api/upload/customer-video", status: 200, url });
+    return res.status(200).json({ success: true, url });
+  } catch (err) {
+    const isImageKitError =
+      err.message && err.message.includes("ImageKit upload failed");
+    const statusCode = isImageKitError ? 502 : 500;
+    const msg = isImageKitError ? err.message : "Internal server error";
+    console.error({
+      route: "POST /api/upload/customer-video",
+      status: statusCode,
+      error: err.message,
+    });
+    return res.status(statusCode).json({ success: false, message: msg });
+  }
+}
+
+// ==================================================================
 // ADMIN — DELETE /api/upload/delete-file
 // Body: { url }
 // Delete file from Supabase storage directly.
@@ -240,5 +282,6 @@ module.exports = {
   uploadBannerFile,
   uploadProductImage,
   uploadReviewImage,
+  uploadCustomerVideoFile,
   deleteUploadedFile,
 };

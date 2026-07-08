@@ -1,10 +1,13 @@
 const express = require("express");
 const router  = express.Router();
-const { upload, uploadProduct, uploadReview, uploadBannerFile, uploadProductImage, uploadReviewImage, deleteUploadedFile } = require("../controllers/uploadController.js");
+const { upload, uploadProduct, uploadReview, uploadBannerFile, uploadProductImage, uploadReviewImage, uploadCustomerVideoFile, deleteUploadedFile } = require("../controllers/uploadController.js");
 const { authenticate, isAdmin } = require("../middleware/auth.js");
 
 // POST /api/upload/banner  — field: "file", kind: "video"|"image", max 100 MB
 router.post("/banner",  authenticate, isAdmin, upload.single("file"),        uploadBannerFile);
+
+// POST /api/upload/customer-video - field: "file", max 20 MB
+router.post("/customer-video", authenticate, isAdmin, upload.single("file"), uploadCustomerVideoFile);
 
 // POST /api/upload/product — fields: "file" (JPEG/PNG/WebP, max 5 MB), "slug" (required, sets folder: product/{slug}/)
 router.post("/product", authenticate, isAdmin, uploadProduct.single("file"), uploadProductImage);
