@@ -9,7 +9,9 @@ const crypto = require("crypto");
 
 ffmpeg.setFfmpegPath(ffmpegPath);
 
-const { IMAGEKIT_PUBLIC_KEY, IMAGEKIT_PRIVATE_KEY, IMAGEKIT_URL_ENDPOINT } = process.env;
+const IMAGEKIT_PUBLIC_KEY = process.env.IMAGEKIT_PUBLIC_KEY ? process.env.IMAGEKIT_PUBLIC_KEY.trim() : "";
+const IMAGEKIT_PRIVATE_KEY = process.env.IMAGEKIT_PRIVATE_KEY ? process.env.IMAGEKIT_PRIVATE_KEY.trim() : "";
+const IMAGEKIT_URL_ENDPOINT = process.env.IMAGEKIT_URL_ENDPOINT ? process.env.IMAGEKIT_URL_ENDPOINT.trim() : "";
 
 if (!IMAGEKIT_PUBLIC_KEY || !IMAGEKIT_PRIVATE_KEY || !IMAGEKIT_URL_ENDPOINT) {
   console.error(
@@ -104,7 +106,7 @@ async function uploadToImageKit(
 
   try {
     const response = await imagekit.files.upload({
-      file: finalBuffer,
+      file: finalBuffer.toString("base64"),
       fileName: fileName,
       folder: folder,
     });
