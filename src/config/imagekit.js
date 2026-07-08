@@ -30,6 +30,7 @@ async function uploadToImageKit(
   mimeType,
   originalName,
   folder = "banner",
+  stripAudio = true,
 ) {
   let finalBuffer = buffer;
   let finalMimeType = mimeType;
@@ -62,7 +63,7 @@ async function uploadToImageKit(
       throw new Error(`Image compression failed: ${err.message}`);
     }
   }
-  // 2. If it's a video, transcode with ffmpeg (to H.264 MP4, 1080p limit, strip audio, 2.5Mbps)
+  // 2. If it's a video, transcode with ffmpeg (to H.264 MP4, 1080p limit, optionally strip audio, 2.5Mbps)
   else if (mimeType && mimeType.startsWith("video/")) {
     const tempDir = os.tmpdir();
     const uniqueId = crypto.randomBytes(8).toString("hex");
@@ -72,17 +73,25 @@ async function uploadToImageKit(
     try {
       await fs.promises.writeFile(inputPath, buffer);
 
+      const outputOpts = [
+        "-c:v libx264",
+        "-b:v 2.5M",
+        "-maxrate 3M",
+        "-bufsize 3M",
+        "-vf scale=w='if(gt(iw,ih),min(1920,iw),-2)':h='if(gt(iw,ih),-2,min(1080,ih))'",
+        "-movflags +faststart"
+      ];
+
+      if (stripAudio) {
+        outputOpts.push("-an");
+      } else {
+        outputOpts.push("-c:a aac");
+        outputOpts.push("-b:a 128k");
+      }
+
       await new Promise((resolve, reject) => {
         ffmpeg(inputPath, { timeout: 60 })
-          .outputOptions([
-            "-c:v libx264",
-            "-b:v 2.5M",
-            "-maxrate 3M",
-            "-bufsize 3M",
-            "-an", // Strip audio track
-            "-vf scale=w='if(gt(iw,ih),min(1920,iw),-2)':h='if(gt(iw,ih),-2,min(1080,ih))'",
-            "-movflags +faststart"
-          ])
+          .outputOptions(outputOpts)
           .on("end", resolve)
           .on("error", (err) => {
             reject(new Error(`Transcoding failed: ${err.message}`));
