@@ -17,6 +17,7 @@ function formatCoupon(c) {
     expiryDate: c.expiry_date,
     description: c.description,
     isActive: c.is_active,
+    showOnHomepage: c.show_on_homepage ?? false,
     isExpired: c.expiry_date ? new Date(c.expiry_date) < new Date() : false,
     isExhausted: c.max_uses !== null && parseInt(c.usage_count) >= c.max_uses,
     createdAt: c.created_at,
@@ -138,10 +139,11 @@ async function getAllCoupons(req, res) {
 async function createCoupon(req, res) {
   const {
     code, discountPercent, discountFlat, freeShipping,
-    minOrder, maxUses, maxUsesPerUser, expiryDate, description, isActive
+    minOrder, maxUses, maxUsesPerUser, expiryDate, description, isActive,
+    showOnHomepage
   } = req.body;
   const adminId = req.user?.id || "unknown";
-  console.log(`[coupon/create] REQUEST | admin: ${adminId} | body:`, { code, discountPercent, discountFlat, freeShipping, minOrder, maxUses, maxUsesPerUser, expiryDate, isActive });
+  console.log(`[coupon/create] REQUEST | admin: ${adminId} | body:`, { code, discountPercent, discountFlat, freeShipping, minOrder, maxUses, maxUsesPerUser, expiryDate, isActive, showOnHomepage });
 
   if (!code) {
     console.log(`[coupon/create] STATUS 400 | reason: code is required`);
@@ -165,8 +167,8 @@ async function createCoupon(req, res) {
     const result = await db.query(
       `INSERT INTO coupons
          (code, discount_percent, discount_flat, free_shipping,
-          min_order, max_uses, max_uses_per_user, expiry_date, description, is_active)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+          min_order, max_uses, max_uses_per_user, expiry_date, description, is_active, show_on_homepage)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
        RETURNING *`,
       [
         upperCode,
@@ -178,7 +180,8 @@ async function createCoupon(req, res) {
         maxUsesPerUser || null,
         expiryDate || null,
         description || null,
-        isActive ?? true
+        isActive ?? true,
+        showOnHomepage || false
       ]
     );
     const created = result.rows[0];
@@ -196,10 +199,11 @@ async function createCoupon(req, res) {
 async function updateCoupon(req, res) {
   const {
     id, code, discountPercent, discountFlat, freeShipping,
-    minOrder, maxUses, maxUsesPerUser, expiryDate, description, isActive
+    minOrder, maxUses, maxUsesPerUser, expiryDate, description, isActive,
+    showOnHomepage
   } = req.body;
   const adminId = req.user?.id || "unknown";
-  console.log(`[coupon/update] REQUEST | admin: ${adminId} | couponId: ${id} | body:`, { code, discountPercent, discountFlat, freeShipping, minOrder, maxUses, maxUsesPerUser, expiryDate, isActive });
+  console.log(`[coupon/update] REQUEST | admin: ${adminId} | couponId: ${id} | body:`, { code, discountPercent, discountFlat, freeShipping, minOrder, maxUses, maxUsesPerUser, expiryDate, isActive, showOnHomepage });
 
   if (!id) {
     return res.status(400).json({ success: false, message: "Coupon ID is required" });
@@ -241,6 +245,7 @@ async function updateCoupon(req, res) {
     const finalExpiryDate = expiryDate !== undefined ? (expiryDate || null) : existing.expiry_date;
     const finalDesc = description !== undefined ? (description || null) : existing.description;
     const finalIsActive = isActive !== undefined ? isActive : existing.is_active;
+    const finalShowOnHomepage = showOnHomepage !== undefined ? showOnHomepage : (existing.show_on_homepage ?? false);
 
     const result = await db.query(
       `UPDATE coupons SET
@@ -254,8 +259,9 @@ async function updateCoupon(req, res) {
          expiry_date      = $8,
          description      = $9,
          is_active        = $10,
+         show_on_homepage = $11,
          updated_at       = NOW()
-       WHERE id = $11
+       WHERE id = $12
        RETURNING *`,
       [
         upperCode,
@@ -268,6 +274,7 @@ async function updateCoupon(req, res) {
         finalExpiryDate,
         finalDesc,
         finalIsActive,
+        finalShowOnHomepage,
         id
       ]
     );
