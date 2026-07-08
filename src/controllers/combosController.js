@@ -1,5 +1,5 @@
 const db = require("../config/db.js");
-const { uploadToSupabase, deleteFromSupabase } = require("../config/supabase.js");
+const { uploadToImageKit, deleteFromImageKit } = require("../config/imagekit.js");
 
 const num = (v) => parseFloat(v) || 0;
 
@@ -261,11 +261,11 @@ async function createCombo(req, res) {
   let imageUrls = [];
   try {
     for (const file of files) {
-      const url = await uploadToSupabase(file.buffer, file.mimetype, file.originalname, "combo");
+      const url = await uploadToImageKit(file.buffer, file.mimetype, file.originalname, "combo");
       imageUrls.push(url);
     }
   } catch (uploadErr) {
-    console.error("Failed to upload combo images to Supabase:", uploadErr);
+    console.error("Failed to upload combo images to ImageKit:", uploadErr);
     return res.status(502).json({ success: false, message: "Failed to upload images to storage" });
   }
 
@@ -312,8 +312,8 @@ async function createCombo(req, res) {
     return res.status(201).json({ success: true, message: "Combo created", combo: formatCombo(combo, itemsMap[combo.id] || []) });
   } catch (err) {
     await client.query("ROLLBACK");
-    Promise.all(imageUrls.map(url => deleteFromSupabase(url))).catch(cleanErr => {
-      console.warn("[Supabase] async cleanup failed after create rollback:", cleanErr.message);
+    Promise.all(imageUrls.map(url => deleteFromImageKit(url))).catch(cleanErr => {
+      console.warn("[ImageKit] async cleanup failed after create rollback:", cleanErr.message);
     });
     console.error({ route: "POST /api/combos/create-combo", status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
@@ -382,11 +382,11 @@ async function updateCombo(req, res) {
     let newUrls = [];
     try {
       for (const file of files) {
-        const url = await uploadToSupabase(file.buffer, file.mimetype, file.originalname, "combo");
+        const url = await uploadToImageKit(file.buffer, file.mimetype, file.originalname, "combo");
         newUrls.push(url);
       }
     } catch (uploadErr) {
-      console.error("Failed to upload combo images during update:", uploadErr);
+      console.error("Failed to upload combo images during update to ImageKit:", uploadErr);
       return res.status(502).json({ success: false, message: "Failed to upload images to storage" });
     }
 
@@ -465,8 +465,8 @@ async function updateCombo(req, res) {
 
       await client.query("COMMIT");
 
-      Promise.all(urlsToDelete.map(url => deleteFromSupabase(url))).catch(cleanErr => {
-        console.warn("[Supabase] async deletes failed after update commit:", cleanErr.message);
+      Promise.all(urlsToDelete.map(url => deleteFromImageKit(url))).catch(cleanErr => {
+        console.warn("[ImageKit] async deletes failed after update commit:", cleanErr.message);
       });
 
       const itemsMap = await fetchComboItemsMap([id]);
@@ -474,8 +474,8 @@ async function updateCombo(req, res) {
       return res.json({ success: true, message: "Combo updated", combo: formatCombo(combo, itemsMap[id] || []) });
     } catch (err) {
       await client.query("ROLLBACK");
-      Promise.all(newUrls.map(url => deleteFromSupabase(url))).catch(cleanErr => {
-        console.warn("[Supabase] async cleanup failed after update rollback:", cleanErr.message);
+      Promise.all(newUrls.map(url => deleteFromImageKit(url))).catch(cleanErr => {
+        console.warn("[ImageKit] async cleanup failed after update rollback:", cleanErr.message);
       });
       throw err;
     } finally {
@@ -511,8 +511,8 @@ async function deleteCombo(req, res) {
 
     if (imgRes.rows.length > 0) {
       const urls = imgRes.rows.map(r => r.image_url);
-      Promise.all(urls.map(url => deleteFromSupabase(url))).catch(err => {
-        console.warn(`[Supabase] async bulk delete failed for combo ${id}: ${err.message}`);
+      Promise.all(urls.map(url => deleteFromImageKit(url))).catch(err => {
+        console.warn(`[ImageKit] async bulk delete failed for combo ${id}: ${err.message}`);
       });
     }
 

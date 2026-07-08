@@ -1,4 +1,4 @@
-const { createClient } = require("@supabase/supabase-js");
+const ImageKit = require("@imagekit/nodejs");
 const sharp = require("sharp");
 const ffmpeg = require("fluent-ffmpeg");
 const ffmpegPath = require("ffmpeg-static");
@@ -9,21 +9,23 @@ const crypto = require("crypto");
 
 ffmpeg.setFfmpegPath(ffmpegPath);
 
-const { SUPABASE_URL, SUPABASE_SERVICE_KEY } = process.env;
+const IMAGEKIT_PUBLIC_KEY = process.env.IMAGEKIT_PUBLIC_KEY ? process.env.IMAGEKIT_PUBLIC_KEY.trim() : "";
+const IMAGEKIT_PRIVATE_KEY = process.env.IMAGEKIT_PRIVATE_KEY ? process.env.IMAGEKIT_PRIVATE_KEY.trim() : "";
+const IMAGEKIT_URL_ENDPOINT = process.env.IMAGEKIT_URL_ENDPOINT ? process.env.IMAGEKIT_URL_ENDPOINT.trim() : "";
 
-if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
+if (!IMAGEKIT_PUBLIC_KEY || !IMAGEKIT_PRIVATE_KEY || !IMAGEKIT_URL_ENDPOINT) {
   console.error(
-    "[Supabase] Missing SUPABASE_URL or SUPABASE_SERVICE_KEY in .env",
+    "[ImageKit] Missing IMAGEKIT_PUBLIC_KEY, IMAGEKIT_PRIVATE_KEY, or IMAGEKIT_URL_ENDPOINT in .env",
   );
 }
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY, {
-  auth: { persistSession: false },
+const imagekit = new ImageKit({
+  publicKey: IMAGEKIT_PUBLIC_KEY,
+  privateKey: IMAGEKIT_PRIVATE_KEY,
+  urlEndpoint: IMAGEKIT_URL_ENDPOINT,
 });
 
-const BUCKET = "Nokk";
-
-async function uploadToSupabase(
+async function uploadToImageKit(
   buffer,
   mimeType,
   originalName,
@@ -100,36 +102,60 @@ async function uploadToSupabase(
     }
   }
 
-  const pathStr = `${folder}/${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+  const fileName = `${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
 
-  // Use long-lived, immutable cache-control for static assets (1 year = 31536000 seconds)
-  const { error } = await supabase.storage
-    .from(BUCKET)
-    .upload(pathStr, finalBuffer, {
-      contentType: finalMimeType,
-      cacheControl: "31536000, public, immutable",
-      upsert: false,
+  try {
+    const response = await imagekit.files.upload({
+      file: finalBuffer.toString("base64"),
+      fileName: fileName,
+      folder: folder,
     });
 
-  if (error) throw new Error(`Storage upload failed: ${error.message}`);
-
-  const { data } = supabase.storage.from(BUCKET).getPublicUrl(pathStr);
-  return data.publicUrl;
+    if (!response || !response.url) {
+      throw new Error("Missing url in ImageKit response");
+    }
+    return response.url;
+  } catch (error) {
+    throw new Error(`ImageKit upload failed: ${error.message}`);
+  }
 }
 
-// Deletes a file from Supabase Storage given its full public or signed URL.
-// Silently skips URLs that don't belong to this project's bucket.
-async function deleteFromSupabase(url) {
+async function deleteFromImageKit(url) {
   if (!url) return;
-  // Extract path after /object/public/<BUCKET>/ or /object/sign/<BUCKET>/
-  const match = url.match(
-    /\/storage\/v1\/object\/(?:public|sign)\/[^/]+\/(.+?)(?:\?|$)/,
-  );
-  if (!match) return;
-  const path = decodeURIComponent(match[1]);
-  const { error } = await supabase.storage.from(BUCKET).remove([path]);
-  if (error)
-    console.warn(`[Supabase] delete failed for "${path}": ${error.message}`);
+  try {
+    const endpoint = IMAGEKIT_URL_ENDPOINT.replace(/\/$/, "");
+    if (!url.startsWith(endpoint)) {
+      console.warn(`[ImageKit] delete skipped: URL "${url}" does not match endpoint "${endpoint}"`);
+      return;
+    }
+
+    let relativePath = url.replace(endpoint, "");
+    if (relativePath.startsWith("/")) {
+      relativePath = relativePath.slice(1);
+    }
+    relativePath = decodeURIComponent(relativePath);
+
+    const parts = relativePath.split("/");
+    const filename = parts.pop();
+    const folder = "/" + parts.join("/");
+
+    const listResult = await imagekit.assets.list({
+      path: folder,
+    });
+
+    const match = listResult.find(
+      (item) => item.name === filename || item.filePath === "/" + relativePath
+    );
+
+    if (!match || !match.fileId) {
+      console.warn(`[ImageKit] delete skipped: file not found for "${relativePath}"`);
+      return;
+    }
+
+    await imagekit.files.delete(match.fileId);
+  } catch (err) {
+    console.warn(`[ImageKit] delete failed for URL "${url}": ${err.message}`);
+  }
 }
 
-module.exports = { supabase, uploadToSupabase, deleteFromSupabase };
+module.exports = { imagekit, uploadToImageKit, deleteFromImageKit };

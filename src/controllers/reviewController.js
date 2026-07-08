@@ -1,5 +1,5 @@
 const db = require("../config/db.js");
-const { deleteFromSupabase } = require("../config/supabase.js");
+const { deleteFromImageKit } = require("../config/imagekit.js");
 
 // ------------------------------------------------------------------
 // Helpers
@@ -169,8 +169,8 @@ async function deleteReview(req, res) {
     // the actual Supabase files asynchronously so nothing gets orphaned.
     if (imgRes.rows.length > 0) {
       const urls = imgRes.rows.map(r => r.image_url);
-      Promise.all(urls.map(url => deleteFromSupabase(url))).catch(err => {
-        console.warn(`[Supabase] async delete failed for review ${reviewId}: ${err.message}`);
+      Promise.all(urls.map(url => deleteFromImageKit(url))).catch(err => {
+        console.warn(`[ImageKit] async delete failed for review ${reviewId}: ${err.message}`);
       });
     }
 
@@ -235,8 +235,8 @@ async function updateReview(req, res) {
       await db.query("DELETE FROM product_review_images WHERE review_id = $1", [reviewId]);
       if (oldImgRes.rows.length > 0) {
         const oldUrls = oldImgRes.rows.map(r => r.image_url);
-        Promise.all(oldUrls.map(url => deleteFromSupabase(url))).catch(err => {
-          console.warn(`[Supabase] async delete failed for review ${reviewId}: ${err.message}`);
+        Promise.all(oldUrls.map(url => deleteFromImageKit(url))).catch(err => {
+          console.warn(`[ImageKit] async delete failed for review ${reviewId}: ${err.message}`);
         });
       }
 
@@ -301,8 +301,8 @@ async function deleteMyReview(req, res) {
     // the actual Supabase files asynchronously so nothing gets orphaned.
     if (imgRes.rows.length > 0) {
       const urls = imgRes.rows.map(r => r.image_url);
-      Promise.all(urls.map(url => deleteFromSupabase(url))).catch(err => {
-        console.warn(`[Supabase] async delete failed for review ${reviewId}: ${err.message}`);
+      Promise.all(urls.map(url => deleteFromImageKit(url))).catch(err => {
+        console.warn(`[ImageKit] async delete failed for review ${reviewId}: ${err.message}`);
       });
     }
 

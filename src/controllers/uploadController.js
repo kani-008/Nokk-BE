@@ -1,8 +1,8 @@
 const multer = require("multer");
 const {
-  uploadToSupabase,
-  deleteFromSupabase,
-} = require("../config/supabase.js");
+  uploadToImageKit,
+  deleteFromImageKit,
+} = require("../config/imagekit.js");
 
 const BANNER_TYPES = new Set([
   "video/mp4",
@@ -69,7 +69,7 @@ async function uploadBannerFile(req, res) {
   });
 
   try {
-    const url = await uploadToSupabase(
+    const url = await uploadToImageKit(
       file.buffer,
       file.mimetype,
       file.originalname,
@@ -77,10 +77,10 @@ async function uploadBannerFile(req, res) {
     console.log({ route: "POST /api/upload/banner", status: 200, url });
     return res.status(200).json({ success: true, url });
   } catch (err) {
-    const isSupabaseError =
-      err.message && err.message.includes("Storage upload failed");
-    const statusCode = isSupabaseError ? 502 : 500;
-    const msg = isSupabaseError ? err.message : "Internal server error";
+    const isImageKitError =
+      err.message && err.message.includes("ImageKit upload failed");
+    const statusCode = isImageKitError ? 502 : 500;
+    const msg = isImageKitError ? err.message : "Internal server error";
     console.error({
       route: "POST /api/upload/banner",
       status: statusCode,
@@ -123,7 +123,7 @@ async function uploadProductImage(req, res) {
   });
 
   try {
-    const url = await uploadToSupabase(
+    const url = await uploadToImageKit(
       file.buffer,
       file.mimetype,
       file.originalname,
@@ -132,10 +132,10 @@ async function uploadProductImage(req, res) {
     console.log({ route: "POST /api/upload/product", status: 200, url });
     return res.status(200).json({ success: true, url });
   } catch (err) {
-    const isSupabaseError =
-      err.message && err.message.includes("Storage upload failed");
-    const statusCode = isSupabaseError ? 502 : 500;
-    const msg = isSupabaseError ? err.message : "Internal server error";
+    const isImageKitError =
+      err.message && err.message.includes("ImageKit upload failed");
+    const statusCode = isImageKitError ? 502 : 500;
+    const msg = isImageKitError ? err.message : "Internal server error";
     console.error({
       route: "POST /api/upload/product",
       status: statusCode,
@@ -180,7 +180,7 @@ async function uploadReviewImage(req, res) {
   });
 
   try {
-    const url = await uploadToSupabase(
+    const url = await uploadToImageKit(
       file.buffer,
       file.mimetype,
       file.originalname,
@@ -189,10 +189,10 @@ async function uploadReviewImage(req, res) {
     console.log({ route: "POST /api/upload/review-image", status: 200, url });
     return res.status(200).json({ success: true, url });
   } catch (err) {
-    const isSupabaseError =
-      err.message && err.message.includes("Storage upload failed");
-    const statusCode = isSupabaseError ? 502 : 500;
-    const msg = isSupabaseError ? err.message : "Internal server error";
+    const isImageKitError =
+      err.message && err.message.includes("ImageKit upload failed");
+    const statusCode = isImageKitError ? 502 : 500;
+    const msg = isImageKitError ? err.message : "Internal server error";
     console.error({
       route: "POST /api/upload/review-image",
       status: statusCode,
@@ -216,7 +216,7 @@ async function deleteUploadedFile(req, res) {
   }
 
   try {
-    await deleteFromSupabase(url);
+    await deleteFromImageKit(url);
     console.log({ route: "DELETE /api/upload/delete-file", status: 200, url });
     return res
       .status(200)

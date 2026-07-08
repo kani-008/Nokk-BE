@@ -1,5 +1,5 @@
 const db = require("../config/db.js");
-const { uploadToSupabase, deleteFromSupabase } = require("../config/supabase.js");
+const { uploadToImageKit, deleteFromImageKit } = require("../config/imagekit.js");
 
 // Shape for every category response — every column included
 function formatCategory(c) {
@@ -105,7 +105,7 @@ async function createCategory(req, res) {
 
   try {
     if (req.file) {
-      imageUrl = await uploadToSupabase(req.file.buffer, req.file.mimetype, req.file.originalname, "category");
+      imageUrl = await uploadToImageKit(req.file.buffer, req.file.mimetype, req.file.originalname, "category");
     }
 
     if (!nameEn || !slug) {
@@ -158,7 +158,7 @@ async function updateCategory(req, res) {
     const oldImageUrl = existing.rows[0].image_url;
 
     if (req.file) {
-      imageUrl = await uploadToSupabase(req.file.buffer, req.file.mimetype, req.file.originalname, "category");
+      imageUrl = await uploadToImageKit(req.file.buffer, req.file.mimetype, req.file.originalname, "category");
     }
 
     if (slug) {
@@ -200,7 +200,7 @@ async function updateCategory(req, res) {
     );
 
     if ((isRemovingImage || (imageUrl && imageUrl !== oldImageUrl)) && oldImageUrl) {
-      await deleteFromSupabase(oldImageUrl);
+      await deleteFromImageKit(oldImageUrl);
     }
 
     console.log({ route: "PUT /api/categories/update-category", categoryId: id, status: 200 });
@@ -237,7 +237,7 @@ async function deleteCategory(req, res) {
       console.log({ route: "DELETE /api/categories/delete-category", categoryId: id, status: 404, message: "Category not found" });
       return res.status(404).json({ success: false, message: "Category not found" });
     }
-    await deleteFromSupabase(result.rows[0].image_url);
+    await deleteFromImageKit(result.rows[0].image_url);
     console.log({ route: "DELETE /api/categories/delete-category", categoryId: id, status: 200 });
     return res.status(200).json({ success: true, message: "Category deleted" });
   } catch (err) {

@@ -1007,7 +1007,7 @@ async function googleLogin(req, res) {
       });
 
       console.log({ route: "POST /google-login", email, userId: user.id, status: 200, message: "New Google account created" });
-      return res.json({
+      return res.status(200).json({
         success: true,
         message: "Signed in successfully",
         accessToken,
@@ -1042,7 +1042,7 @@ async function googleLogin(req, res) {
         );
 
         console.log({ route: "POST /google-login", email, userId: reactivatedUser.id, status: 200, message: "Reactivated Google-only account transparently" });
-        return res.json({
+        return res.status(200).json({
           success: true,
           message: "Signed in successfully",
           accessToken,
@@ -1055,7 +1055,7 @@ async function googleLogin(req, res) {
       // so surface DEACTIVATED and let the frontend collect it via
       // /auth/google-link-confirm (which reactivates on a successful match).
       console.log({ route: "POST /google-login", email, status: 200, message: "DEACTIVATED" });
-      return res.json({ success: false, code: "DEACTIVATED", userId: user.id });
+      return res.status(200).json({ success: false, code: "DEACTIVATED", userId: user.id });
     }
 
     if (user.auth_provider === "google") {
@@ -1069,7 +1069,7 @@ async function googleLogin(req, res) {
       );
 
       console.log({ route: "POST /google-login", email, userId: user.id, status: 200 });
-      return res.json({
+      return res.status(200).json({
         success: true,
         message: "Signed in successfully",
         accessToken,
@@ -1080,7 +1080,7 @@ async function googleLogin(req, res) {
 
     // CASE E — email/password account with the same email: confirm identity first.
     console.log({ route: "POST /google-login", email, userId: user.id, status: 200, message: "NEEDS_PASSWORD_CONFIRM" });
-    return res.json({ success: false, code: "NEEDS_PASSWORD_CONFIRM" });
+    return res.status(200).json({ success: false, code: "NEEDS_PASSWORD_CONFIRM" });
   } catch (err) {
     console.error({ route: "POST /google-login", email, status: 500, error: err.message });
     return res.status(500).json({ success: false, message: "Internal server error" });
@@ -1091,7 +1091,7 @@ async function googleLogin(req, res) {
 // POST /google-link-confirm   -> googleLinkConfirm
 // Body: { credential, password }
 // Confirms a Google sign-in attempt against an existing password
-// account with the same email, without changing auth_provider.
+// account with the same email, updating auth_provider to 'google'.
 // ==================================================================
 async function googleLinkConfirm(req, res) {
   const { credential, password } = req.body;
@@ -1139,14 +1139,20 @@ async function googleLinkConfirm(req, res) {
     let user2 = user;
     if (user.status === "deactivated") {
       // Password confirmed: reactivate as part of this same successful
-      // link-confirm, mirroring reactivate()'s behavior. Keeps the security
-      // bar consistent (password required wherever one exists) while still
-      // giving this email/password account a path back in via Google.
+      // link-confirm, mirroring reactivate()'s behavior. Also set auth_provider to 'google'
+      // to record the successful Google link.
       const reactivateRes = await db.query(
-        "UPDATE users SET status = 'active', updated_at = NOW() WHERE id = $1 RETURNING *",
+        "UPDATE users SET status = 'active', auth_provider = 'google', updated_at = NOW() WHERE id = $1 RETURNING *",
         [user.id],
       );
       user2 = reactivateRes.rows[0];
+    } else {
+      // Unconditionally set auth_provider to 'google' to record successful Google link.
+      const updateRes = await db.query(
+        "UPDATE users SET auth_provider = 'google', updated_at = NOW() WHERE id = $1 RETURNING *",
+        [user.id],
+      );
+      user2 = updateRes.rows[0];
     }
 
     const accessToken = signAccessToken(user2);
@@ -1158,7 +1164,7 @@ async function googleLinkConfirm(req, res) {
     );
 
     console.log({ route: "POST /google-link-confirm", email, userId: user2.id, status: 200 });
-    return res.json({
+    return res.status(200).json({
       success: true,
       message: "Signed in successfully",
       accessToken,

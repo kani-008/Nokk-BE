@@ -1,5 +1,5 @@
 const db = require("../config/db.js");
-const { uploadToSupabase, deleteFromSupabase } = require("../config/supabase.js");
+const { uploadToImageKit, deleteFromImageKit } = require("../config/imagekit.js");
 const { fetchReviewsForProduct } = require("./reviewController.js");
 
 // ------------------------------------------------------------------
@@ -132,6 +132,77 @@ function makeSlug(nameEn) {
   return nameEn.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
 }
 
+function parseSearchQuery(queryText) {
+  let parsed = {
+    cleanQuery: queryText || "",
+    maxPrice: null,
+    minPrice: null,
+    categorySlug: null,
+  };
+
+  if (!queryText) return parsed;
+
+  let text = queryText.toLowerCase().trim();
+
+  // 1. Parse price patterns: "below X", "under X", "less than X"
+  const maxPriceRegex = /(?:below|under|less\s+than)\s*(?:rs\.?|rupees|inr)?\s*(\d+)/gi;
+  let maxMatch = maxPriceRegex.exec(text);
+  if (maxMatch) {
+    parsed.maxPrice = parseFloat(maxMatch[1]);
+    text = text.replace(maxPriceRegex, "").trim();
+  }
+
+  // Parse "above X", "over X", "greater than X"
+  const minPriceRegex = /(?:above|over|greater\s+than)\s*(?:rs\.?|rupees|inr)?\s*(\d+)/gi;
+  let minMatch = minPriceRegex.exec(text);
+  if (minMatch) {
+    parsed.minPrice = parseFloat(minMatch[1]);
+    text = text.replace(minPriceRegex, "").trim();
+  }
+
+  // 2. Parse category matches
+  const categoryMap = {
+    "dry fish": "dry-fish",
+    "karuvadu": "dry-fish",
+    "karuvattu": "dry-fish",
+    "dryfish": "dry-fish",
+    "pickle": "pickles",
+    "pickles": "pickles",
+    "oorugai": "pickles",
+    "urugai": "pickles",
+    "combo": "combos",
+    "combos": "combos",
+    "prawn": "prawns",
+    "prawns": "prawns",
+    "shrimp": "prawns",
+    "shrimps": "prawns",
+    "low salt": "low-salt",
+    "lowsalt": "low-salt"
+  };
+
+  for (const [key, slug] of Object.entries(categoryMap)) {
+    const regex = new RegExp(`\\b${key}\\b`, "i");
+    if (regex.test(text)) {
+      parsed.categorySlug = slug;
+      text = text.replace(regex, "").trim();
+      break;
+    }
+  }
+
+  text = text.replace(/\s+/g, " ").trim();
+  parsed.cleanQuery = text;
+
+  return parsed;
+}
+
+function fuzzySearchString(str) {
+  if (!str) return "";
+  return str.toLowerCase()
+    .replace(/aa/g, "a")
+    .replace(/ee/g, "i")
+    .replace(/oo/g, "u");
+}
+
 // ==================================================================
 // PUBLIC — GET /api/products/get-all
 // Full product listing with server-side filters. Uses v_products_with_price.
@@ -144,14 +215,31 @@ async function getAllProducts(req, res) {
   const page     = Math.max(parseInt(req.query.page) || 1, 1);
   const limit    = Math.min(parseInt(req.query.limit) || 12, 100);
   const offset   = (page - 1) * limit;
-  const search   = req.query.search   || null;
-  const catSlug  = req.query.category || null;
+
+  const rawSearch = req.query.search || null;
+  let search = null;
+  let parsedMaxPrice = req.query.maxPrice ? parseFloat(req.query.maxPrice) : null;
+  let parsedMinPrice = req.query.minPrice ? parseFloat(req.query.minPrice) : null;
+  let parsedCategorySlug = req.query.category || null;
+
+  if (rawSearch) {
+    const parsed = parseSearchQuery(rawSearch);
+    search = parsed.cleanQuery ? fuzzySearchString(parsed.cleanQuery) : null;
+    if (parsed.maxPrice !== null && parsedMaxPrice === null) {
+      parsedMaxPrice = parsed.maxPrice;
+    }
+    if (parsed.minPrice !== null && parsedMinPrice === null) {
+      parsedMinPrice = parsed.minPrice;
+    }
+    if (parsed.categorySlug && parsedCategorySlug === null) {
+      parsedCategorySlug = parsed.categorySlug;
+    }
+  }
+
   const inStock  = req.query.inStock      === "true";
   const isBest   = req.query.isBestseller === "true";
   const isNew    = req.query.isNew        === "true";
   const hasOffer = req.query.hasOffer     === "true";
-  const minPrice = req.query.minPrice ? parseFloat(req.query.minPrice) : null;
-  const maxPrice = req.query.maxPrice ? parseFloat(req.query.maxPrice) : null;
   const minRating = req.query.rating ? parseFloat(req.query.rating) : null;
   const weightLabels = req.query.weight
     ? req.query.weight.split(",").filter(Boolean)
@@ -175,26 +263,26 @@ async function getAllProducts(req, res) {
 
   // Shared WHERE params: $1…$11
   const baseParams = [
-    catSlug,      // $1
-    search,       // $2
-    inStock,      // $3
-    isBest,       // $4
-    isNew,        // $5
-    minPrice,     // $6
-    maxPrice,     // $7
-    minRating,    // $8
-    hasOffer,     // $9
-    weightLabels, // $10  (null or string[])
-    ids,          // $11  (null or integer[])
+    parsedCategorySlug,  // $1
+    search,              // $2
+    inStock,             // $3
+    isBest,              // $4
+    isNew,               // $5
+    parsedMinPrice,      // $6
+    parsedMaxPrice,      // $7
+    minRating,           // $8
+    hasOffer,            // $9
+    weightLabels,        // $10  (null or string[])
+    ids,                 // $11  (null or integer[])
   ];
 
   const whereClause = `
     v.is_active = TRUE
     AND ($1::text    IS NULL OR v.category_slug = $1)
     AND ($2::text    IS NULL OR
-          v.name_en    ILIKE '%' || $2 || '%' OR
+          LOWER(REPLACE(REPLACE(REPLACE(v.name_en, 'aa', 'a'), 'ee', 'i'), 'oo', 'u')) ILIKE '%' || $2 || '%' OR
           v.name_ta    ILIKE '%' || $2 || '%' OR
-          v.description ILIKE '%' || $2 || '%')
+          LOWER(REPLACE(REPLACE(REPLACE(v.description, 'aa', 'a'), 'ee', 'i'), 'oo', 'u')) ILIKE '%' || $2 || '%')
     AND (NOT $3 OR v.total_stock > 0)
     AND (NOT $4 OR v.is_bestseller = TRUE)
     AND (NOT $5 OR v.is_new = TRUE)
@@ -218,7 +306,7 @@ async function getAllProducts(req, res) {
 
   console.log({
     route: "GET /api/products",
-    query: { page, limit, search, category: catSlug, inStock, isBest, isNew, hasOffer, minPrice, maxPrice, minRating, weightLabels, ids },
+    query: { page, limit, search, category: parsedCategorySlug, inStock, isBest, isNew, hasOffer, minPrice: parsedMinPrice, maxPrice: parsedMaxPrice, minRating, weightLabels, ids },
     status: "fetching products"
   });
 
@@ -612,8 +700,8 @@ async function updateProduct(req, res) {
         );
         // Delete files from Supabase Storage asynchronously
         const urlsToDelete = imgsToDelete.map(img => img.image_url);
-        Promise.all(urlsToDelete.map(url => deleteFromSupabase(url))).catch(err => {
-          console.warn(`[Supabase] async delete failed during update of product ${id}: ${err.message}`);
+        Promise.all(urlsToDelete.map(url => deleteFromImageKit(url))).catch(err => {
+          console.warn(`[ImageKit] async delete failed during update of product ${id}: ${err.message}`);
         });
       }
 
@@ -705,8 +793,8 @@ async function deleteProduct(req, res) {
     // Asynchronously delete files from Supabase Storage (non-blocking)
     if (imgRes.rows.length > 0) {
       const urls = imgRes.rows.map(r => r.image_url);
-      Promise.all(urls.map(url => deleteFromSupabase(url))).catch(err => {
-        console.warn(`[Supabase] async bulk delete failed for product ${id}: ${err.message}`);
+      Promise.all(urls.map(url => deleteFromImageKit(url))).catch(err => {
+        console.warn(`[ImageKit] async bulk delete failed for product ${id}: ${err.message}`);
       });
     }
 
@@ -852,7 +940,7 @@ async function addImage(req, res) {
       if (prodRes.rows.length === 0) {
         return res.status(404).json({ success: false, message: "Product not found" });
       }
-      imageUrl = await uploadToSupabase(req.file.buffer, req.file.mimetype, req.file.originalname, `product/${prodRes.rows[0].slug}`);
+      imageUrl = await uploadToImageKit(req.file.buffer, req.file.mimetype, req.file.originalname, `product/${prodRes.rows[0].slug}`);
     }
 
     if (!imageUrl) {
@@ -924,7 +1012,7 @@ async function addImages(req, res) {
 
     // Upload all files to Supabase in parallel: product/{slug}/{filename}
     const uploadedUrls = await Promise.all(
-      files.map(f => uploadToSupabase(f.buffer, f.mimetype, f.originalname, `product/${slug}`))
+      files.map(f => uploadToImageKit(f.buffer, f.mimetype, f.originalname, `product/${slug}`))
     );
 
     const insertedImages = [];
@@ -946,9 +1034,9 @@ async function addImages(req, res) {
     console.log({ route: "POST /api/products/add-images", productId: id, status: 201, count: insertedImages.length });
     return res.status(201).json({ success: true, message: `${insertedImages.length} image(s) added`, images: insertedImages });
   } catch (err) {
-    const isSupabaseError = err.message && err.message.includes("Storage upload failed");
-    const statusCode = isSupabaseError ? 502 : 500;
-    const msg = isSupabaseError ? err.message : "Internal server error";
+    const isImageKitError = err.message && err.message.includes("ImageKit upload failed");
+    const statusCode = isImageKitError ? 502 : 500;
+    const msg = isImageKitError ? err.message : "Internal server error";
     console.error({ route: "POST /api/products/add-images", productId: id, status: statusCode, error: err.message });
     return res.status(statusCode).json({ success: false, message: msg });
   }
@@ -970,8 +1058,8 @@ async function deleteImage(req, res) {
       return res.status(404).json({ success: false, message: "Image not found" });
     }
     // Delete from Supabase asynchronously to prevent API response delays
-    deleteFromSupabase(result.rows[0].image_url).catch(err => {
-      console.warn(`[Supabase] async delete failed for "${result.rows[0].image_url}": ${err.message}`);
+    deleteFromImageKit(result.rows[0].image_url).catch(err => {
+      console.warn(`[ImageKit] async delete failed for "${result.rows[0].image_url}": ${err.message}`);
     });
     console.log({ route: "DELETE /api/products/delete-image", productId: id, imageId, status: 200 });
     return res.status(200).json({ success: true, message: "Image deleted" });
@@ -1127,17 +1215,51 @@ async function getProductSuggestions(req, res) {
     return res.json({ success: true, suggestions: [] });
   }
 
-  const searchTerm = query.trim();
-
   try {
+    const parsed = parseSearchQuery(query);
+    const fuzzyQuery = parsed.cleanQuery ? fuzzySearchString(parsed.cleanQuery) : null;
+
+    let whereParts = ["v.is_active = TRUE"];
+    let params = [];
+    let paramIdx = 1;
+
+    if (fuzzyQuery) {
+      params.push(`%${fuzzyQuery}%`);
+      whereParts.push(`(
+        LOWER(REPLACE(REPLACE(REPLACE(v.name_en, 'aa', 'a'), 'ee', 'i'), 'oo', 'u')) ILIKE $${paramIdx} OR
+        v.name_ta ILIKE $${paramIdx} OR
+        LOWER(REPLACE(REPLACE(REPLACE(v.description, 'aa', 'a'), 'ee', 'i'), 'oo', 'u')) ILIKE $${paramIdx}
+      )`);
+      paramIdx++;
+    }
+
+    if (parsed.maxPrice !== null) {
+      params.push(parsed.maxPrice);
+      whereParts.push(`v.min_price <= $${paramIdx}`);
+      paramIdx++;
+    }
+
+    if (parsed.minPrice !== null) {
+      params.push(parsed.minPrice);
+      whereParts.push(`v.min_price >= $${paramIdx}`);
+      paramIdx++;
+    }
+
+    if (parsed.categorySlug) {
+      params.push(parsed.categorySlug);
+      whereParts.push(`v.category_slug = $${paramIdx}`);
+      paramIdx++;
+    }
+
+    const whereClause = whereParts.join(" AND ");
+
     const result = await db.query(
-      `SELECT id, name_en, name_ta, slug, primary_image, min_price, avg_rating
-       FROM v_products_with_price
-       WHERE is_active = TRUE
-         AND (name_en ILIKE $1 OR name_ta ILIKE $1 OR description ILIKE $1)
-       ORDER BY avg_rating DESC, name_en ASC
+      `SELECT v.id, v.name_en, v.name_ta, v.slug, v.primary_image, v.min_price, v.avg_rating
+       FROM v_products_with_price v
+       WHERE ${whereClause}
+       ORDER BY v.avg_rating DESC, v.name_en ASC
        LIMIT 8`,
-      [`%${searchTerm}%`]
+      params
     );
 
     const suggestions = result.rows.map((row) => ({
