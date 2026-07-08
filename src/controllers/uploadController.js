@@ -16,15 +16,25 @@ const BANNER_TYPES = new Set([
 
 const IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 
-// 20 MB limit for banners (videos and images)
+// 100 MB limit for banners (videos can be large before ffmpeg compresses them)
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 20 * 1024 * 1024 },
+  limits: { fileSize: 100 * 1024 * 1024 },
   fileFilter: (_req, file, cb) =>
     BANNER_TYPES.has(file.mimetype)
       ? cb(null, true)
-      : cb(new Error(`Unsupported type: ${file.mimetype}`)),
+      : cb(new Error(`Unsupported type: ${file.mimetype}. Allowed: mp4, webm, jpeg, png, webp`)),
 });
+
+// Wrap a multer handler in a Promise so its errors can be caught in async functions
+function runMulter(multerHandler, req, res) {
+  return new Promise((resolve, reject) => {
+    multerHandler(req, res, (err) => {
+      if (err) reject(err);
+      else resolve();
+    });
+  });
+}
 
 // 5 MB limit for product images
 const uploadProduct = multer({
@@ -55,16 +65,36 @@ const uploadReview = multer({
 // Response: { success, url }
 // ==================================================================
 async function uploadBannerFile(req, res) {
+  // Run multer internally so we can catch its errors (file too large, wrong type)
+  // and return a clean 400/413 JSON instead of a raw 500.
+  try {
+    await runMulter(upload.single("file"), req, res);
+  } catch (multerErr) {
+    const isTooBig = multerErr.code === "LIMIT_FILE_SIZE";
+    console.error({
+      route: "POST /api/upload/banner",
+      status: isTooBig ? 413 : 400,
+      error: multerErr.message,
+    });
+    return res
+      .status(isTooBig ? 413 : 400)
+      .json({
+        success: false,
+        message: isTooBig
+          ? "File too large — max 100 MB allowed"
+          : multerErr.message,
+      });
+  }
+
   const { file } = req;
   if (!file) {
-    return res
-      .status(400)
-      .json({ success: false, message: "No file provided" });
+    return res.status(400).json({ success: false, message: "No file provided" });
   }
 
   console.log({
     route: "POST /api/upload/banner",
     file: file.originalname,
+    mimeType: file.mimetype,
     size: file.size,
   });
 
@@ -77,10 +107,9 @@ async function uploadBannerFile(req, res) {
     console.log({ route: "POST /api/upload/banner", status: 200, url });
     return res.status(200).json({ success: true, url });
   } catch (err) {
-    const isImageKitError =
-      err.message && err.message.includes("ImageKit upload failed");
+    const isImageKitError = err.message && err.message.includes("ImageKit upload failed");
     const statusCode = isImageKitError ? 502 : 500;
-    const msg = isImageKitError ? err.message : "Internal server error";
+    const msg = isImageKitError ? err.message : `Upload processing failed: ${err.message}`;
     console.error({
       route: "POST /api/upload/banner",
       status: statusCode,
@@ -208,6 +237,25 @@ async function uploadReviewImage(req, res) {
 // Response: { success, url }
 // ==================================================================
 async function uploadCustomerVideoFile(req, res) {
+  try {
+    await runMulter(upload.single("file"), req, res);
+  } catch (multerErr) {
+    const isTooBig = multerErr.code === "LIMIT_FILE_SIZE";
+    console.error({
+      route: "POST /api/upload/customer-video",
+      status: isTooBig ? 413 : 400,
+      error: multerErr.message,
+    });
+    return res
+      .status(isTooBig ? 413 : 400)
+      .json({
+        success: false,
+        message: isTooBig
+          ? "File too large — max 100 MB allowed"
+          : multerErr.message,
+      });
+  }
+
   const { file } = req;
   if (!file) {
     return res
@@ -218,6 +266,7 @@ async function uploadCustomerVideoFile(req, res) {
   console.log({
     route: "POST /api/upload/customer-video",
     file: file.originalname,
+    mimeType: file.mimetype,
     size: file.size,
   });
 
@@ -235,7 +284,7 @@ async function uploadCustomerVideoFile(req, res) {
     const isImageKitError =
       err.message && err.message.includes("ImageKit upload failed");
     const statusCode = isImageKitError ? 502 : 500;
-    const msg = isImageKitError ? err.message : "Internal server error";
+    const msg = isImageKitError ? err.message : `Upload processing failed: ${err.message}`;
     console.error({
       route: "POST /api/upload/customer-video",
       status: statusCode,
