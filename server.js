@@ -30,6 +30,7 @@ const notificationRoute = require("./src/routes/notificationRoute.js");
 const locationRoute = require("./src/routes/locationRoute.js");
 const sitemapRoute = require("./src/routes/sitemapRoute.js");
 const whatsappRoute = require("./src/routes/whatsappRoutes.js");
+const newsletterRoute = require("./src/routes/newsletterRoute.js");
 const { maintenanceGuard } = require("./src/middleware/maintenance.js");
 
 const app = express();
@@ -131,6 +132,7 @@ app.use("/api/reports", reportRoute); // exportable reports (admin only)
 app.use("/api/upload", uploadRoute); // file upload to Supabase Storage (admin only)
 app.use("/api/notifications", notificationRoute); // notifications (customer) | send/manage (admin)
 app.use("/api/location", locationRoute); // public — pincode lookup + reverse geocode
+app.use("/api/newsletter", newsletterRoute); // subscribe (public) | list (admin)
 
 // ── 404 ───────────────────────────────────────────────────────────
 app.use((req, res) => {
