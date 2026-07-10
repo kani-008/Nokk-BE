@@ -63,53 +63,7 @@ async function uploadToImageKit(
       throw new Error(`Image compression failed: ${err.message}`);
     }
   }
-  // 2. If it's a video, transcode with ffmpeg (to H.264 MP4, 1080p limit, optionally strip audio, 2.5Mbps)
-  else if (mimeType && mimeType.startsWith("video/")) {
-    const tempDir = os.tmpdir();
-    const uniqueId = crypto.randomBytes(8).toString("hex");
-    const inputPath = path.join(tempDir, `input_${uniqueId}.${ext}`);
-    const outputPath = path.join(tempDir, `output_${uniqueId}.mp4`);
 
-    try {
-      await fs.promises.writeFile(inputPath, buffer);
-
-      const outputOpts = [
-        "-c:v libx264",
-        "-b:v 2.5M",
-        "-maxrate 3M",
-        "-bufsize 3M",
-        "-vf scale=w='if(gt(iw,ih),min(1920,iw),-2)':h='if(gt(iw,ih),-2,min(1080,ih))'",
-        "-movflags +faststart"
-      ];
-
-      if (stripAudio) {
-        outputOpts.push("-an");
-      } else {
-        outputOpts.push("-c:a aac");
-        outputOpts.push("-b:a 128k");
-      }
-
-      await new Promise((resolve, reject) => {
-        ffmpeg(inputPath, { timeout: 60 })
-          .outputOptions(outputOpts)
-          .on("end", resolve)
-          .on("error", (err) => {
-            reject(new Error(`Transcoding failed: ${err.message}`));
-          })
-          .save(outputPath);
-      });
-
-      finalBuffer = await fs.promises.readFile(outputPath);
-      finalMimeType = "video/mp4";
-      ext = "mp4";
-    } catch (err) {
-      throw new Error(`Video compression failed: ${err.message}`);
-    } finally {
-      // Clean up temp files
-      await fs.promises.unlink(inputPath).catch(() => {});
-      await fs.promises.unlink(outputPath).catch(() => {});
-    }
-  }
 
   const fileName = `${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
 
