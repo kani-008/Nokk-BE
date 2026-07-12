@@ -1,6 +1,7 @@
 const crypto = require("crypto");
 const db = require("../config/db.js");
 const { createNotification } = require("./notificationController.js");
+const { sendAdminOrderEmail } = require("../services/emailService.js");
 const { getRazorpayClient, RAZORPAY_KEY_ID } = require("../config/razorpay.js");
 const { OFFER_MATCH_LATERAL_SQL } = require("../config/offerMatching.js");
 
@@ -712,6 +713,7 @@ async function checkout(req, res) {
         entityId: orderId,
         link: `/admin/orders/${orderId}`,
       });
+      sendAdminOrderEmail(orderId);
     }
 
     const { items: fmtItems, timeline } = await fetchItemsAndTimeline(orderId);
@@ -1765,6 +1767,7 @@ async function verifyRazorpayPayment(req, res) {
         entityId:   orderId,
         link:       `/admin/orders/${orderId}`,
       });
+      sendAdminOrderEmail(orderId);
     }
 
     const [orderRow, { items: fmtItems, timeline }] = await Promise.all([
@@ -1988,6 +1991,7 @@ async function handleRazorpayWebhook(req, res) {
         entityId:   orderId,
         link:       `/admin/orders/${orderId}`,
       });
+      sendAdminOrderEmail(orderId);
     }
 
     return res.status(200).json({ success: true, message: "Order created via webhook" });

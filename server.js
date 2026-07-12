@@ -161,7 +161,7 @@ function getLanIp() {
 }
 
 // ── Start ─────────────────────────────────────────────────────────
-const server = app.listen(PORT, HOST, () => {
+const server = app.listen(PORT, HOST, async () => {
   console.log(`NammaOorKaruvattuKadai server started (${IS_PROD ? "production" : "development"})`);
   if (IS_PROD) {
     console.log(`Listening on port ${PORT}`);
@@ -169,6 +169,16 @@ const server = app.listen(PORT, HOST, () => {
     const lanIp = getLanIp();
     console.log(`Local:   http://localhost:${PORT}`);
     console.log(`Network: http://${lanIp}:${PORT}   (same Wi-Fi)`);
+  }
+
+  // Warm up database connection
+  const db = require("./src/config/db.js");
+  const startTime = Date.now();
+  try {
+    await db.query("SELECT 1");
+    console.log(`[DB] Warmed up in ${Date.now() - startTime}ms`);
+  } catch (err) {
+    console.warn(`[DB] Warm-up warning: ${err.message}`);
   }
 });
 

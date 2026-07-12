@@ -275,8 +275,7 @@ async function uploadCustomerVideoFile(req, res) {
       file.buffer,
       file.mimetype,
       file.originalname,
-      "customer-videos",
-      false
+      "customer-videos"
     );
     console.log({ route: "POST /api/upload/customer-video", status: 200, url });
     return res.status(200).json({ success: true, url });
