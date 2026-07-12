@@ -87,6 +87,30 @@ async function updateSettings(req, res) {
         return res.status(400).json({ success: false, message: `${friendlyName} (${key}) must be a valid hex color` });
       }
     }
+    if (key === "termsContent" || key === "privacyContent") {
+      if (value !== undefined && (typeof value !== "string" || value.trim() === "")) {
+        const friendlyName = key === "termsContent" ? "Terms & Conditions" : "Privacy Policy";
+        return res.status(400).json({ success: false, message: `${friendlyName} content cannot be empty` });
+      }
+    }
+    if (key === "whyUsReasons" && value !== undefined) {
+      try {
+        const parsed = JSON.parse(value);
+        if (!Array.isArray(parsed)) {
+          return res.status(400).json({ success: false, message: "Why Choose Us reasons must be an array" });
+        }
+        if (parsed.length !== 3) {
+          return res.status(400).json({ success: false, message: "Why Choose Us reasons must have exactly 3 items" });
+        }
+        for (const item of parsed) {
+          if (!item.emoji || !item.title || !item.desc) {
+            return res.status(400).json({ success: false, message: "Each Why Choose Us reason must have emoji, title, and description" });
+          }
+        }
+      } catch (err) {
+        return res.status(400).json({ success: false, message: "Why Choose Us reasons must be a valid JSON array" });
+      }
+    }
   }
 
   const client = await db.getClient();
