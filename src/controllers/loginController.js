@@ -855,7 +855,7 @@ async function register(req, res) {
       message: `${fullName.trim()} (${normalizedPhone}) just registered`,
       entityType: "users",
       entityId: String(user.id),
-      link: `/admin/customers/${user.id}`,
+      link: `/admin/users?highlightUserId=${user.id}`,
     });
 
     console.log({
@@ -1003,7 +1003,7 @@ async function googleLogin(req, res) {
         message: `${fullName} (${email}) just registered via Google`,
         entityType: "users",
         entityId: String(user.id),
-        link: `/admin/customers/${user.id}`,
+        link: `/admin/users?highlightUserId=${user.id}`,
       });
 
       console.log({ route: "POST /google-login", email, userId: user.id, status: 200, message: "New Google account created" });
