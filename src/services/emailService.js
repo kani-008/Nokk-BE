@@ -12,13 +12,13 @@ async function sendAdminOrderEmail(orderId) {
 
   try {
     // 1. Fetch order details from database
-    const orderRes = await db.query("SELECT total, address FROM orders WHERE id = $1", [orderId]);
+    const orderRes = await db.query("SELECT total, customer_name FROM orders WHERE id = $1", [orderId]);
     if (orderRes.rows.length === 0) {
       console.warn(`[EmailService] Order ${orderId} not found in database. Skipping email.`);
       return;
     }
     const order = orderRes.rows[0];
-    const customerName = order.address?.fullName || "Customer";
+    const customerName = order.customer_name || "Customer";
     const total = order.total;
 
     // 2. Fetch order items

@@ -40,4 +40,5 @@ router.get("/admin/get-replacements", authenticate, isAdmin, adminGetReplacement
 router.get("/admin/get-order", authenticate, isAdmin, adminGetOrderById); // ?id=
 router.put("/admin/update-status", authenticate, isAdmin, adminUpdateStatus); // id -> body
 router.put("/admin/update-replacement", authenticate, isAdmin, adminUpdateReplacement); // requestId -> body
+
 module.exports = router;
