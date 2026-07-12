@@ -1,13 +1,4 @@
 const ImageKit = require("@imagekit/nodejs");
-const sharp = require("sharp");
-const ffmpeg = require("fluent-ffmpeg");
-const ffmpegPath = require("ffmpeg-static");
-const fs = require("fs");
-const path = require("path");
-const os = require("os");
-const crypto = require("crypto");
-
-ffmpeg.setFfmpegPath(ffmpegPath);
 
 const IMAGEKIT_PUBLIC_KEY = process.env.IMAGEKIT_PUBLIC_KEY ? process.env.IMAGEKIT_PUBLIC_KEY.trim() : "";
 const IMAGEKIT_PRIVATE_KEY = process.env.IMAGEKIT_PRIVATE_KEY ? process.env.IMAGEKIT_PRIVATE_KEY.trim() : "";
@@ -30,39 +21,9 @@ async function uploadToImageKit(
   mimeType,
   originalName,
   folder = "banner",
-  stripAudio = true,
 ) {
-  let finalBuffer = buffer;
-  let finalMimeType = mimeType;
-  let ext = (originalName || "file").split(".").pop().toLowerCase();
-
-  // 1. If it's an image, process it with sharp (convert to WebP, resize to longest edge <= 1600px)
-  if (mimeType && mimeType.startsWith("image/")) {
-    try {
-      const image = sharp(buffer);
-      const metadata = await image.metadata();
-
-      let resizeOptions = {};
-      if (metadata.width > 1600 || metadata.height > 1600) {
-        if (metadata.width > metadata.height) {
-          resizeOptions.width = 1600;
-        } else {
-          resizeOptions.height = 1600;
-        }
-      }
-
-      let processedImage = image;
-      if (resizeOptions.width || resizeOptions.height) {
-        processedImage = processedImage.resize(resizeOptions);
-      }
-
-      finalBuffer = await processedImage.webp({ quality: 80 }).toBuffer();
-      finalMimeType = "image/webp";
-      ext = "webp";
-    } catch (err) {
-      throw new Error(`Image compression failed: ${err.message}`);
-    }
-  }
+  const finalBuffer = buffer;
+  const ext = (originalName || "file").split(".").pop().toLowerCase();
 
 
   const fileName = `${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
