@@ -71,6 +71,19 @@ async function createNotification({
       [eventType, priority, title, message, entityType, entityId, link]
     );
     console.log({ fn: "createNotification", eventType, notificationId: result.rows[0].id, status: "created" });
+
+    // Send email notification for high or urgent priorities (excluding new_order to avoid duplicate emails)
+    if ((priority === "high" || priority === "urgent") && eventType !== "new_order") {
+      try {
+        const { sendAdminNotificationEmail } = require("../services/emailService.js");
+        sendAdminNotificationEmail(result.rows[0]).catch(err => {
+          console.warn("[createNotification] sendAdminNotificationEmail catch:", err.message);
+        });
+      } catch (err) {
+        console.warn("[createNotification] sendAdminNotificationEmail require error:", err.message);
+      }
+    }
+
     return result.rows[0];
   } catch (err) {
     // Never let a notification failure break the calling operation.

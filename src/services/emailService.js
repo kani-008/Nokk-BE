@@ -110,6 +110,55 @@ async function sendAdminOrderEmail(orderId) {
   }
 }
 
+async function sendAdminNotificationEmail(notification) {
+  const adminEmail = process.env.ADMIN_EMAIL;
+  const adminEmailAppPassword = process.env.ADMIN_EMAIL_APP_PASSWORD;
+
+  if (!adminEmail || !adminEmailAppPassword) {
+    console.warn("[EmailService] ADMIN_EMAIL or ADMIN_EMAIL_APP_PASSWORD not configured. Skipping admin notification email.");
+    return;
+  }
+
+  try {
+    const transporter = nodemailer.createTransport({
+      service: "gmail",
+      auth: {
+        user: adminEmail,
+        pass: adminEmailAppPassword,
+      },
+    });
+
+    const adminUrl = process.env.ADMIN_PANEL_URL || "http://localhost:5173";
+    const notificationLink = notification.link ? `${adminUrl}${notification.link}` : adminUrl;
+
+    const mailOptions = {
+      from: `"Namma Oor Karuvattu Kadai" <${adminEmail}>`,
+      to: adminEmail,
+      subject: `[Action Needed] ${notification.title || "New Notification"}`,
+      text: `${notification.message || ""}\n\nView and manage:\n${notificationLink}\n`,
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #eee; border-radius: 10px;">
+          <h2 style="color: #b91c1c; border-bottom: 2px solid #b91c1c; padding-bottom: 10px; margin-top: 0;">Attention Required</h2>
+          <p style="font-size: 16px; font-weight: bold; color: #111827; margin: 15px 0;">${notification.title || "New Notification"}</p>
+          <p style="font-size: 14px; color: #4b5563; line-height: 1.6; margin: 15px 0;">${notification.message || ""}</p>
+          
+          <div style="margin-top: 30px; text-align: center;">
+            <a href="${notificationLink}" style="background-color: #b91c1c; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">
+              View and Take Action
+            </a>
+          </div>
+        </div>
+      `,
+    };
+
+    const info = await transporter.sendMail(mailOptions);
+    console.log(`[EmailService] Admin action notification email sent: ${info.messageId}`);
+  } catch (err) {
+    console.warn(`[EmailService] Failed to send admin notification email:`, err.message);
+  }
+}
+
 module.exports = {
   sendAdminOrderEmail,
+  sendAdminNotificationEmail,
 };
