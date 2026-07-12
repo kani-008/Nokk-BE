@@ -12,14 +12,36 @@ async function sendAdminOrderEmail(orderId) {
 
   try {
     // 1. Fetch order details from database
-    const orderRes = await db.query("SELECT total, customer_name FROM orders WHERE id = $1", [orderId]);
+    const orderRes = await db.query(
+      `SELECT total, customer_name, customer_phone, customer_email, 
+              payment_method, payment_status, 
+              shipping_address_line1, shipping_address_line2, shipping_taluk, 
+              shipping_city, shipping_state, shipping_pincode 
+       FROM orders WHERE id = $1`,
+      [orderId]
+    );
     if (orderRes.rows.length === 0) {
       console.warn(`[EmailService] Order ${orderId} not found in database. Skipping email.`);
       return;
     }
     const order = orderRes.rows[0];
     const customerName = order.customer_name || "Customer";
+    const customerPhone = order.customer_phone || "—";
+    const customerEmail = order.customer_email || "";
     const total = order.total;
+    const paymentMethod = order.payment_method || "—";
+    const paymentStatus = order.payment_status || "—";
+
+    // Format delivery address block
+    const addressParts = [
+      order.shipping_address_line1,
+      order.shipping_address_line2,
+      order.shipping_taluk ? `${order.shipping_taluk} (Taluk)` : null,
+      order.shipping_city,
+      order.shipping_state,
+      order.shipping_pincode
+    ].filter(Boolean);
+    const formattedAddress = addressParts.join(", ");
 
     // 2. Fetch order items
     const itemsRes = await db.query("SELECT name_en, quantity, weight FROM order_items WHERE order_id = $1", [orderId]);
@@ -50,16 +72,25 @@ async function sendAdminOrderEmail(orderId) {
       from: `"Namma Oor Karuvattu Kadai" <${adminEmail}>`,
       to: adminEmail,
       subject: `New Order Received — ₹${total}`,
-      text: `New Order Received!\n\nOrder ID: #${orderId}\nCustomer: ${customerName}\nTotal Amount: ₹${total}\n\nItems Ordered:\n${itemsListText}\n\nView this order in the admin panel:\n${viewLink}\n`,
+      text: `New Order Received!\n\nOrder ID: #${orderId}\nTotal Amount: ₹${total}\n\nCustomer Details:\n- Name: ${customerName}\n- Phone: ${customerPhone}\n${customerEmail ? `- Email: ${customerEmail}\n` : ""} - Delivery Address: ${formattedAddress}\n\nPayment Details:\n- Method: ${paymentMethod.toUpperCase()}\n- Status: ${paymentStatus.toUpperCase()}\n\nItems Ordered:\n${itemsListText}\n\nView this order in the admin panel:\n${viewLink}\n`,
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #eee; border-radius: 10px;">
-          <h2 style="color: #854d0e; border-bottom: 2px solid #854d0e; padding-bottom: 10px;">New Order Received!</h2>
-          <p><strong>Order ID:</strong> #${orderId}</p>
-          <p><strong>Customer Name:</strong> ${customerName}</p>
-          <p><strong>Total Amount:</strong> ₹${total}</p>
+          <h2 style="color: #854d0e; border-bottom: 2px solid #854d0e; padding-bottom: 10px; margin-top: 0;">New Order Received!</h2>
+          <p style="margin: 8px 0;"><strong>Order ID:</strong> #${orderId}</p>
+          <p style="margin: 8px 0;"><strong>Total Amount:</strong> ₹${total}</p>
           
-          <h3 style="color: #854d0e; margin-top: 20px;">Items Ordered</h3>
-          <ul style="padding-left: 20px; line-height: 1.6;">
+          <h3 style="color: #854d0e; margin-top: 20px; border-bottom: 1px solid #eee; padding-bottom: 5px; font-size: 16px;">Customer Details</h3>
+          <p style="margin: 6px 0;"><strong>Name:</strong> ${customerName}</p>
+          <p style="margin: 6px 0;"><strong>Phone:</strong> ${customerPhone}</p>
+          ${customerEmail ? `<p style="margin: 6px 0;"><strong>Email:</strong> ${customerEmail}</p>` : ""}
+          <p style="margin: 6px 0; line-height: 1.4;"><strong>Delivery Address:</strong> ${formattedAddress}</p>
+
+          <h3 style="color: #854d0e; margin-top: 20px; border-bottom: 1px solid #eee; padding-bottom: 5px; font-size: 16px;">Payment Details</h3>
+          <p style="margin: 6px 0;"><strong>Method:</strong> <span style="text-transform: uppercase;">${paymentMethod}</span></p>
+          <p style="margin: 6px 0;"><strong>Status:</strong> <span style="text-transform: uppercase;">${paymentStatus}</span></p>
+
+          <h3 style="color: #854d0e; margin-top: 20px; border-bottom: 1px solid #eee; padding-bottom: 5px; font-size: 16px;">Items Ordered</h3>
+          <ul style="padding-left: 20px; line-height: 1.6; margin-top: 10px;">
             ${itemsListHtml}
           </ul>
           
