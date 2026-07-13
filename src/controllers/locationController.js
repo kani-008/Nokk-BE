@@ -16,6 +16,34 @@ async function fetchWithTimeout(url, ms) {
   }
 }
 
+async function lookupPincodeFallback(pincode) {
+  const url = `https://api.postalpincode.in/pincode/${pincode}`;
+  console.log(`[locationController] Requesting api.postalpincode.in fallback: ${url}`);
+  const response = await fetchWithTimeout(url, 6000);
+  if (!response.ok) {
+    throw new Error(`Postal Pincode API returned status ${response.status}`);
+  }
+  const result = await response.json();
+  if (!Array.isArray(result) || result.length === 0 || result[0].Status !== "Success") {
+    throw new Error("Pincode not found or invalid format");
+  }
+  const offices = result[0].PostOffice || [];
+  if (offices.length === 0) {
+    throw new Error("No records found for pincode");
+  }
+  let bestOffice = offices.find((o) => o.DeliveryStatus === "Delivery" && o.Block && o.Block !== "NA");
+  if (!bestOffice) bestOffice = offices.find((o) => o.Block && o.Block !== "NA");
+  if (!bestOffice) bestOffice = offices.find((o) => o.DeliveryStatus === "Delivery");
+  if (!bestOffice) bestOffice = offices[0];
+
+  return {
+    pincode,
+    district: bestOffice.District || "",
+    state: formatState(bestOffice.State) || "",
+    taluk: bestOffice.Block && bestOffice.Block !== "NA" ? bestOffice.Block : "",
+  };
+}
+
 // ==================================================================
 // PUBLIC — GET /api/location/pincode?pincode=600001
 // Looks up district/state/taluk for an Indian pincode via data.gov.in.
@@ -38,8 +66,7 @@ async function lookupPincode(req, res) {
     const response = await fetchWithTimeout(url, 6000);
     console.log(`[locationController] India Gov API Response Status: ${response.status} ${response.statusText}`);
     if (!response.ok) {
-      console.error({ route: "GET /api/location/pincode", pincode, status: response.status, message: "Gov API request failed" });
-      return res.status(502).json({ success: false, message: "Failed to fetch pincode details" });
+      throw new Error(`Gov API request failed with status ${response.status}`);
     }
     const result = await response.json();
     const records = result.records || [];
@@ -64,11 +91,18 @@ async function lookupPincode(req, res) {
     console.log({ route: "GET /api/location/pincode", pincode, status: 200 });
     return res.status(200).json({ success: true, data });
   } catch (err) {
-    const timedOut = err.name === "AbortError";
-    console.error({ route: "GET /api/location/pincode", pincode, status: timedOut ? 504 : 500, error: err.message });
-    return res
-      .status(timedOut ? 504 : 500)
-      .json({ success: false, message: timedOut ? "Pincode request timed out" : "Internal server error" });
+    console.error(`[locationController] India Gov API error: ${err.message}. Trying postalpincode.in fallback...`);
+    try {
+      const data = await lookupPincodeFallback(pincode);
+      console.log({ route: "GET /api/location/pincode", pincode, status: 200, source: "fallback" });
+      return res.status(200).json({ success: true, data });
+    } catch (fallbackErr) {
+      const timedOut = err.name === "AbortError" || fallbackErr.name === "AbortError";
+      console.error({ route: "GET /api/location/pincode", pincode, status: timedOut ? 504 : 500, error: fallbackErr.message });
+      return res
+        .status(timedOut ? 504 : 500)
+        .json({ success: false, message: timedOut ? "Pincode request timed out" : "Internal server error" });
+    }
   }
 }
 
@@ -137,10 +171,20 @@ async function reverseGeocode(req, res) {
             data.taluk = bestRecord.taluk && bestRecord.taluk !== "NA" ? bestRecord.taluk : data.taluk;
             data.state = formatState(bestRecord.statename) || data.state;
           }
+        } else {
+          throw new Error(`Gov API response status ${govResponse.status}`);
         }
       } catch (govErr) {
-        console.error(`[locationController] Gov API Enrichment error:`, govErr.message);
-        // fall back to raw Geoapify values silently
+        console.error(`[locationController] Gov API Enrichment error: ${govErr.message}. Trying postalpincode.in fallback...`);
+        try {
+          const fallbackData = await lookupPincodeFallback(data.pincode);
+          data.city = fallbackData.district || data.city;
+          data.taluk = fallbackData.taluk || data.taluk;
+          data.state = fallbackData.state || data.state;
+          console.log(`[locationController] Pincode enrichment fallback succeeded`);
+        } catch (fallbackErr) {
+          console.error(`[locationController] Pincode enrichment fallback also failed:`, fallbackErr.message);
+        }
       }
     }
 
