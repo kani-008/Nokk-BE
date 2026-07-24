@@ -57,8 +57,8 @@ async function lookupPincode(req, res) {
     return res.status(400).json({ success: false, message: "A valid 6-digit pincode is required" });
   }
 
-  const apiKey = process.env.GOV_API_KEY || "579b464db66ec23bdd000001f5f5495c8f4f4d27412f3be4880d9b57";
-  const resourceId = process.env.GOV_PINCODE_RESOURCE_ID || "6176ee09-3d56-4a3b-8115-21841576b2f6";
+  const apiKey = process.env.GOV_API_KEY;
+  const resourceId = process.env.GOV_PINCODE_RESOURCE_ID;
   const url = `https://api.data.gov.in/resource/${resourceId}?api-key=${apiKey}&format=json&filters[pincode]=${pincode}`;
 
   try {
@@ -122,7 +122,7 @@ async function reverseGeocode(req, res) {
     return res.status(400).json({ success: false, message: "Valid lat and lng are required" });
   }
 
-  const apiKey = process.env.GEOAPIFY_API_KEY || "d7aaf34296d344029c1537ef453c227f";
+  const apiKey = process.env.GEOAPIFY_API_KEY;
   const url = `https://api.geoapify.com/v1/geocode/reverse?lat=${latitude}&lon=${longitude}&apiKey=${apiKey}`;
 
   try {
@@ -152,8 +152,8 @@ async function reverseGeocode(req, res) {
     // Enrich with the gov pincode directory when we have a clean 6-digit pincode
     if (data.pincode && /^\d{6}$/.test(data.pincode)) {
       try {
-        const govApiKey = process.env.GOV_API_KEY || "579b464db66ec23bdd000001f5f5495c8f4f4d27412f3be4880d9b57";
-        const resourceId = process.env.GOV_PINCODE_RESOURCE_ID || "6176ee09-3d56-4a3b-8115-21841576b2f6";
+        const govApiKey = process.env.GOV_API_KEY;
+        const resourceId = process.env.GOV_PINCODE_RESOURCE_ID;
         const govUrl = `https://api.data.gov.in/resource/${resourceId}?api-key=${govApiKey}&format=json&filters[pincode]=${data.pincode}`;
         console.log(`[locationController] Requesting Gov API for enrichment: ${govUrl.replace(govApiKey, "HIDDEN_KEY")}`);
         const govResponse = await fetchWithTimeout(govUrl, 6000);
