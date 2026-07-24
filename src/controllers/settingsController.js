@@ -87,9 +87,9 @@ async function updateSettings(req, res) {
         return res.status(400).json({ success: false, message: `${friendlyName} (${key}) must be a valid hex color` });
       }
     }
-    if (key === "termsContent" || key === "privacyContent") {
+    if (key === "termsContent" || key === "privacyContent" || key === "shippingContent" || key === "returnContent") {
       if (value !== undefined && (typeof value !== "string" || value.trim() === "")) {
-        const friendlyName = key === "termsContent" ? "Terms & Conditions" : "Privacy Policy";
+        const friendlyName = key === "termsContent" ? "Terms & Conditions" : key === "privacyContent" ? "Privacy Policy" : key === "shippingContent" ? "Shipping Policy" : "Return & Refund Policy";
         return res.status(400).json({ success: false, message: `${friendlyName} content cannot be empty` });
       }
     }

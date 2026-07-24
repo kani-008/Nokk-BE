@@ -1,7 +1,14 @@
 const db     = require("../config/db.js");
+const { formatProduct, formatVariant, formatImage } = require("./productController.js");
 
 // ------------------------------------------------------------------
-// Single JOIN query — returns all wishlist items with product details.
+// Single query — joins wishlists (for ordering) against
+// v_products_with_price (the same view /products/get-all uses), so the
+// response is fully-hydrated with offer pricing, ratings, categoryName,
+// etc. in one round trip instead of the old fetch-IDs-then-fetch-products
+// two-step. variants/images are then batch-fetched the same way
+// getAllProducts does it, and run through the shared formatProduct so
+// this endpoint's items are shaped identically to /products/get-all.
 // wishlists PK is (user_id, product_id) — no separate id column.
 // ------------------------------------------------------------------
 const isValidUuid = (id) => {
@@ -9,47 +16,49 @@ const isValidUuid = (id) => {
 };
 async function fetchWishlist(userId) {
   const res = await db.query(
-    `SELECT
-       w.product_id,
-       w.created_at,
-       p.name_en,
-       p.name_ta,
-       p.slug,
-       p.is_bestseller,
-       p.is_new,
-       pi.image_url          AS primary_image,
-       COALESCE(MIN(pv.price), 0)         AS min_price,
-       COALESCE(MIN(pv.compare_price), 0) AS min_compare_price,
-       COALESCE(BOOL_OR(pv.stock_qty > 0), FALSE) AS in_stock
+    `SELECT v.*, w.created_at AS wishlist_added_at
      FROM wishlists w
-     JOIN products p ON p.id = w.product_id
-     LEFT JOIN product_images pi
-       ON pi.product_id = p.id AND pi.is_primary = TRUE
-     LEFT JOIN product_variants pv
-       ON pv.product_id = p.id AND pv.is_active = TRUE
+     JOIN v_products_with_price v ON v.id = w.product_id
      WHERE w.user_id = $1
-     GROUP BY w.product_id, w.created_at, p.name_en, p.name_ta,
-              p.slug, p.is_bestseller, p.is_new, pi.image_url
      ORDER BY w.created_at DESC`,
     [userId]
   );
 
-  const items = res.rows.map(r => ({
-    productId:       r.product_id,
-    name:            r.name_ta ? `${r.name_en} (${r.name_ta})` : r.name_en,
-    nameEn:          r.name_en,
-    nameTa:          r.name_ta,
-    slug:            r.slug,
-    primaryImage:    r.primary_image,
-    minPrice:        parseFloat(r.min_price),
-    minComparePrice: parseFloat(r.min_compare_price),
-    inStock:         r.in_stock,
-    isBestseller:    r.is_bestseller,
-    isNew:           r.is_new,
-    addedAt:         r.created_at
-  }));
+  const rows = res.rows;
+  let variantsByProduct = {};
+  let imagesByProduct   = {};
+  if (rows.length > 0) {
+    const productIds = rows.map(r => r.id);
+    const [varRes, imgRes] = await Promise.all([
+      db.query(
+        `SELECT * FROM product_variants WHERE product_id = ANY($1) AND is_active = TRUE ORDER BY weight_grams ASC`,
+        [productIds]
+      ),
+      db.query(
+        `SELECT * FROM product_images WHERE product_id = ANY($1) ORDER BY sort_order ASC`,
+        [productIds]
+      )
+    ]);
 
-  const itemIds = items.map(item => item.productId);
+    varRes.rows.forEach(v => {
+      const pid = v.product_id;
+      if (!variantsByProduct[pid]) variantsByProduct[pid] = [];
+      variantsByProduct[pid].push(formatVariant(v));
+    });
+
+    imgRes.rows.forEach(i => {
+      const pid = i.product_id;
+      if (!imagesByProduct[pid]) imagesByProduct[pid] = [];
+      imagesByProduct[pid].push(formatImage(i));
+    });
+  }
+
+  // rows are already ordered by wishlist created_at DESC — map() preserves that order
+  const items = rows.map(p =>
+    formatProduct(p, variantsByProduct[p.id] || [], imagesByProduct[p.id] || [])
+  );
+
+  const itemIds = items.map(item => item.id);
   console.log(`[Wishlist Backend Log] Wishlist fetched with item codes: [${itemIds.join(", ")}] (User: ${userId})`);
 
   return items;

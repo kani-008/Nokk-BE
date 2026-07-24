@@ -1282,5 +1282,6 @@ module.exports = {
   getProductSuggestions,
   createProduct, updateProduct, deleteProduct,
   addVariant, updateVariant, deleteVariant,
-  addImage, addImages, deleteImage
+  addImage, addImages, deleteImage,
+  formatProduct, formatVariant, formatImage
 };

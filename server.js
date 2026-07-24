@@ -102,6 +102,31 @@ app.get("/", (req, res) => {
   });
 });
 
+// ── Logo Static Asset Fallback Handler ─────────────────────────────
+// Primary: Serves local website logo from frontend build/public directory
+// Fallback: If local file is missing/404, automatically 302 redirects to ImageKit CDN
+const fs = require("fs");
+const path = require("path");
+const LOGO_CDN_BASE = "https://ik.imagekit.io/Nokk/logo";
+
+app.get(["/logo2.png", "/logo.png", "/logo1.png", "/fav.png"], (req, res) => {
+  const assetName = req.path.replace(/^\//, "");
+  const publicPath = path.resolve(__dirname, "../Nokk-FE/public", assetName);
+  const distPath = path.resolve(__dirname, "../Nokk-FE/dist", assetName);
+
+  if (fs.existsSync(distPath)) {
+    return res.sendFile(distPath);
+  }
+  if (fs.existsSync(publicPath)) {
+    return res.sendFile(publicPath);
+  }
+
+  // Fallback to ImageKit CDN if local asset is missing or unreadable
+  const cdnFallbackUrl = `${LOGO_CDN_BASE}/${assetName === "fav.png" ? "fav.png" : "logo2.png"}`;
+  console.warn(`[logo-fallback] Local asset '${req.path}' not found on server — 302 redirecting to ImageKit CDN: ${cdnFallbackUrl}`);
+  return res.redirect(302, cdnFallbackUrl);
+});
+
 // ── Sitemap — mounted at root before /api routes, no auth ─────────
 app.use("/sitemap.xml", sitemapRoute);
 
