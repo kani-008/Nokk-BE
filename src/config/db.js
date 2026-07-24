@@ -1,5 +1,6 @@
 const dns = require("dns");
-dns.setDefaultResultOrder("ipv4first");
+// Commented out to allow IPv6-only connection resolution (such as Supabase direct DB URL)
+// dns.setDefaultResultOrder("ipv4first");
 
 const { Pool } = require('pg');
 require('dotenv').config();
